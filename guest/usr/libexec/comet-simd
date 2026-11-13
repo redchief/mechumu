@@ -63,7 +63,8 @@ def key_event(button, value):
 # The host's hub serves the connector's USB devices over USB/IP at 10.0.2.2:3240 (QEMU user
 # networking's address for the host): bus ID 1-1 is the attached extension, 1-2 the connector's
 # low-speed pins (a DLN-2 adapter: I2C as /dev/i2c-comet-ext, GPIO as /dev/gpiochip-comet-ext, ADC
-# as an IIO device; see 70-comet-sim.rules).
+# as an IIO device; see 70-comet-sim.rules); 1-3 is the Comet's internal sensor bus (IMU, light,
+# magnetometer; registered by the comet-board kernel module).
 VHCI = "/sys/devices/platform/vhci_hcd.0"
 HUB = ("10.0.2.2", 3240)
 ports = {}  # bus ID -> vhci port
@@ -132,14 +133,16 @@ def setup_connector():
 
 
 def keep_i2c_attached():
-    """The connector's I2C pins are always there; reattach whenever the hub (re)starts."""
+    """Always-there buses: the connector's pin bridge (1-2) and the Comet's internal sensor bus (1-3,
+    whose devices the comet-board module registers). Reattach whenever the hub (re)starts."""
     while True:
-        port = ports.get("1-2")
-        if port is None or port_state(port) == 4:
-            try:
-                usbip_attach("1-2")
-            except (OSError, RuntimeError, StopIteration):
-                pass
+        for busid in ("1-2", "1-3"):
+            port = ports.get(busid)
+            if port is None or port_state(port) == 4:
+                try:
+                    usbip_attach(busid)
+                except (OSError, RuntimeError, StopIteration):
+                    pass
         time.sleep(3)
 
 
@@ -179,6 +182,14 @@ def handle(line):
     if cmd == "usb" and not args:  # what's on the connector's USB pins, as the guest sees it
         names = [open(f"{d}/product").read().strip() for d in sorted(usb_devices())]
         return ", ".join(names) or "no USB devices"
+    if cmd == "iio" and not args:  # the IIO devices the guest's drivers made, with the light reading
+        out = []
+        for d in sorted(glob.glob("/sys/bus/iio/devices/iio:device*"), key=lambda p: int(p.rsplit("device", 1)[1])):
+            name = open(f"{d}/name").read().strip()
+            if os.path.exists(f"{d}/in_illuminance_input"):
+                name += f"={float(open(f'{d}/in_illuminance_input').read()):g}lux"
+            out.append(name)
+        return " ".join(out) or "no IIO devices"
     if cmd == "button" and len(args) == 1 and args[0] in BUTTONS and args[0] != "extension":
         key_event(args[0], 1)
         time.sleep(0.1)
@@ -195,7 +206,7 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | usb")
+    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | usb | iio")
 
 
 def main():

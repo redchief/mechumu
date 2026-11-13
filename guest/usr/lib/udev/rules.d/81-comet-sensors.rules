@@ -1,0 +1,3 @@
+# The Virtual Comet's IMU has no working data-ready interrupt (kmod/comet-board), so its FIFO never
+# fills: have iio-sensor-proxy poll it instead of reading its buffer. Runs after 80-iio-sensor-proxy.rules.
+SUBSYSTEM=="iio", ATTR{name}=="icm42605-accel", ENV{IIO_SENSOR_PROXY_TYPE}="iio-poll-accel"

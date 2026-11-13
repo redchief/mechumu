@@ -3,8 +3,8 @@
 A virtual [Mecha Comet](https://mecha.so) you can run on your laptop. mechumu
 boots the real Comet software (the Mecha Linux kernel, Mechanix OS and its apps)
 in QEMU, at native speed on Apple Silicon and arm64 Linux. It simulates the
-Comet's hardware buttons and battery, and its 40-pin extension connector (USB,
-I2C, GPIO, ADC, UART and CAN): snap on the Keyboard, Gamepad or IO Breakout
+Comet's hardware buttons, battery and onboard sensors (IMU, light sensor,
+magnetometer), and its 40-pin extension connector (USB, I2C, GPIO, ADC, UART and CAN): snap on the Keyboard, Gamepad or IO Breakout
 extension, or one you're designing, without a device.
 
 <p>
@@ -20,7 +20,7 @@ It has two modes:
 | For | App developers, learners, anyone without a device | Kernel and driver developers |
 | Machine | QEMU `virt` with virtio devices | QEMU's chip-level NXP i.MX8MP EVK model |
 | Screen | 1080×1240, the Comet panel's size | None: serial console only |
-| Hardware | Simulated buttons, battery, GPIO, CAN, extension connector | The model's own i.MX UART, GPIO, FlexCAN, uSDHC |
+| Hardware | Simulated buttons, battery, sensors, CAN, extension connector | The model's own i.MX UART, GPIO, FlexCAN, uSDHC |
 
 ## Quick start
 
@@ -71,6 +71,9 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 ./mechumu ctl adc 1 1.65               # put 1.65 V on connector pin ADC1
 ./mechumu ctl can 123#DEADBEEF         # inject a CAN frame on can0
 ./mechumu ctl button home              # press a button: power, home, volup, voldown
+./mechumu ctl light 500                # ambient light in lux
+./mechumu ctl tilt 90 0                # pitch and roll in degrees: 90 0 is upright, 0 0 flat
+./mechumu ctl heading 90               # compass heading: facing east
 ```
 
 | Comet hardware | Inside the Virtual Comet | Read it with |
@@ -81,6 +84,9 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Connector I2C | `/dev/i2c-comet-ext` | `i2c-dev`, kernel drivers via `new_device` |
 | Connector UART1, UART2 | `/dev/comet-uart1`, `/dev/comet-uart2` (16550s) | Any serial program |
 | CAN bus | Virtual CAN interface `can0` | `candump can0`, SocketCAN |
+| IMU (ICM-42605) | IIO devices `icm42605-accel` and `icm42605-gyro`, via the stock driver | `in_accel_*_raw`, iio-sensor-proxy orientation (`monitor-sensor`) |
+| Ambient light sensor (OPT3001) | IIO device `opt3001` | `in_illuminance_input`, iio-sensor-proxy light level |
+| Magnetometer (LIS2MDL) | IIO device `lis2mdl` | `in_magn_*_raw` |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
 The connector's pins carry whatever the attached extension does (see
@@ -234,6 +240,14 @@ mainline drivers turn into an I2C bus, a gpiochip and an IIO ADC; the hub passes
 each transfer to the attached model. UART1 and UART2 are QEMU PCI serial ports
 whose other ends the hub holds.
 
+The Comet's onboard sensors sit on its internal I2C3 bus. The same server
+provides a second adapter for that bus, with register-level models of the three
+chips ([`lib/sensors.py`](lib/sensors.py)). A small kernel module,
+[`kmod/comet-board`](kmod/comet-board), registers the devices on it as the
+Comet's devicetree does, and their mainline drivers bind. The Virtual Comet boots
+with a devicetree rather than ACPI, as a Comet does, because the IMU's driver
+takes its configuration from it.
+
 The `virt` profile differs from the device image in a few places:
 
 - It uses the generic `virt` machine (virtio GPU, input, disk and network) instead of the i.MX8MP board.
@@ -242,7 +256,8 @@ The `virt` profile differs from the device image in a few places:
 
 ## Limitations
 
-- **IMU:** the ICM-42605 isn't simulated; nothing in Mechanix reads it yet.
+- **IMU buffering:** the IMU's data-ready interrupt never fires, so raw reads and polling work but FIFO-buffered capture doesn't; iio-sensor-proxy is set to poll it.
+- **Sensor axes:** chosen so iio-sensor-proxy reports the right orientation; the Comet's actual mounting (its mount matrix) isn't published.
 - **Connector pins:** USB, I2C, GPIO, ADC and the UARTs reach the model; CAN is a guest-side `can0`. SPI registers a controller (`spi0`) but carries no transfers: Linux creates SPI devices from a devicetree, which QEMU's `virt` machine doesn't give the connector. PWM and I2S aren't simulated.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
@@ -256,7 +271,7 @@ Issues and pull requests are welcome. Some guidelines:
 
 - **Fixes to Mecha's code** should go upstream first. A patch in `patches/` is a stopgap until upstream ships the change, and each patch header says where it is meant to go.
 - **Moving a pin:** update the commit in `build/build.sh`, then check that the patches still apply.
-- **Testing:** before sending a change, run `tests/smoke.sh`. It boots the Virtual Comet headless and exercises every `mechumu ctl` command and every built-in extension end to end through the guest.
+- **Testing:** before sending a change, run `python3 tests/test_sensors.py` (no VM needed) and `tests/smoke.sh`, which boots the Virtual Comet headless and exercises every `mechumu ctl` command and every built-in extension end to end through the guest.
 
 ## License
 

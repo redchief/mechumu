@@ -130,6 +130,26 @@
       </div>
     </section>
     <section>
+      <h2>Sensors</h2>
+      <div class="row2">
+        <label for="lux">Light</label>
+        <input type="range" id="lux" min="0" max="4" step="0.01" value="2.48" aria-label="Ambient light">
+        <span id="lux-v">300 lux</span>
+      </div>
+      <div class="choices" id="poses" style="margin-top:8px">
+        <button data-tilt="90 0">Upright</button>
+        <button data-tilt="0 0">Flat</button>
+        <button data-tilt="-90 0">Upside down</button>
+        <button data-tilt="0 -90">Landscape ⟲</button>
+        <button data-tilt="0 90">Landscape ⟳</button>
+      </div>
+      <div class="row2">
+        <label for="heading">Heading</label>
+        <input type="range" id="heading" min="0" max="359" value="0" aria-label="Compass heading">
+        <span id="heading-v">0° N</span>
+      </div>
+    </section>
+    <section>
       <h2>Activity</h2>
       <pre id="log"></pre>
     </section>
@@ -168,6 +188,15 @@ const bat = () => { $("#bat-v").textContent = `${$("#bat").value}%`; cmd(`ctl ba
 $("#bat").addEventListener("change", bat);
 $("#bat").addEventListener("input", () => { $("#bat-v").textContent = `${$("#bat").value}%`; });
 $("#bat-s").addEventListener("change", bat);
+
+// --- onboard sensors: light (log scale, 1-10000 lux), pose, compass heading ----------------------
+const luxOf = () => Math.round(10 ** +$("#lux").value) - ($("#lux").value === "0" ? 1 : 0);
+$("#lux").addEventListener("input", () => { $("#lux-v").textContent = `${luxOf()} lux`; });
+$("#lux").addEventListener("change", () => cmd(`ctl light ${luxOf()}`, true));
+$("#poses").addEventListener("click", (e) => { const b = e.target.closest("[data-tilt]"); if (b) cmd(`ctl tilt ${b.dataset.tilt}`); });
+const compass = (d) => ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(d / 45) % 8];
+$("#heading").addEventListener("input", () => { $("#heading-v").textContent = `${$("#heading").value}° ${compass(+$("#heading").value)}`; });
+$("#heading").addEventListener("change", () => cmd(`ctl heading ${$("#heading").value}`, true));
 
 // --- extensions --------------------------------------------------------------------------------
 let attached = null;

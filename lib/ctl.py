@@ -6,6 +6,12 @@
   mechumu ctl adc 1 1.65                 # put 1.65 V on connector pin ADC1 (0-3.3)
   mechumu ctl can 123#DEADBEEF           # inject a frame on can0, as if from an extension
   mechumu ctl button home                # press a hardware button: power, home, volup, voldown
+  mechumu ctl light 500                  # ambient light, lux (OPT3001)
+  mechumu ctl tilt 90 0                  # pitch, roll in degrees: 90 0 = upright (ICM-42605)
+  mechumu ctl accel|gyro <x> <y> <z>     # raw motion: m/s², degrees/s
+  mechumu ctl heading 90                 # compass heading in degrees (LIS2MDL)
+  mechumu ctl sensors                    # what the sensors currently sense
+  mechumu ctl iio                        # the IIO devices the guest sees
 
 Sends one line to the hub (lib/hub.py), which passes it over the VM's control port to comet-simd
 in the guest, and prints the one-line reply; exits 0 if it starts with "ok". With --hub

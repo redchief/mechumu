@@ -8,7 +8,8 @@
 
 Runs alongside QEMU (`mechumu run` starts it). The connector's USB pins are a USB/IP server the
 guest imports devices from (port 3240, localhost only): bus ID 1-1 is the attached extension, 1-2
-an always-present DLN-2 adapter carrying the connector's I2C, GPIO and ADC pins (connector.Bridge).
+an always-present DLN-2 adapter carrying the connector's I2C, GPIO and ADC pins (connector.Bridge),
+1-3 the Comet's internal sensor bus (sensors.SensorBus).
 comet-simd in the guest does the importing when told to over the control port. UART1 and UART2 are
 QEMU PCI serial ports whose other ends (uart1.sock, uart2.sock) the hub holds for the model.
 """
@@ -16,7 +17,7 @@ import base64, hashlib, http.server, importlib.util, os, socket, struct, sys, th
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import connector
+import connector, sensors
 
 USBIP_PORT = 3240
 FRAME_PORT = 8090
@@ -27,12 +28,13 @@ class Hub:
     def __init__(self):
         self.ext, self.name = None, None
         self.bridge = connector.Bridge(lambda: self.ext)
+        self.sensors = sensors.SensorBus()
         self.uarts = {1: None, 2: None}
         self.lock = threading.Lock()
         self.port, self.port_lock, self.seq = None, threading.Lock(), 0
 
     def lookup(self, busid):
-        return {"1-1": self.ext, "1-2": self.bridge}.get(busid)
+        return {"1-1": self.ext, "1-2": self.bridge, "1-3": self.sensors}.get(busid)
 
     def load(self, spec):
         path = spec if spec.endswith(".py") else os.path.join(EXTENSIONS, f"{spec}.py")
@@ -177,10 +179,14 @@ class Hub:
             threading.Thread(target=self.control_conn, args=(conn,), daemon=True).start()
 
     def reply(self, line):
-        if line.startswith(("ctl gpio", "ctl adc")):
-            cmd, *args = line[4:].split()
+        if line.startswith("ctl "):
+            cmd, *args = line[4:].split() or [""]
             try:
-                return self.pins(cmd, args)
+                if cmd in ("gpio", "adc"):
+                    return self.pins(cmd, args)
+                if cmd in ("light", "tilt", "accel", "gyro", "heading", "sensors"):
+                    return self.sensors.ctl(cmd, args) or ("error usage: light <lux> | tilt <pitch> <roll> | "
+                                                          "accel|gyro <x> <y> <z> | heading <degrees> | sensors")
             except ValueError as e:
                 return f"error {e}"
         if line.startswith("ctl "):  # the rest of `mechumu ctl`: straight through to comet-simd

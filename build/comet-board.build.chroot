@@ -1,0 +1,11 @@
+#!/bin/sh
+# mkosi build script (build.sh passes it): compiles kmod/comet-board against the image's own kernel,
+# whose headers build.sh installs in the build overlay. mkosi copies $DESTDIR into the image and runs
+# depmod afterwards.
+set -eu
+kver=$(ls /usr/src/kernels)
+[ -d "/usr/lib/modules/$kver" ] || { echo "comet-board: headers for $kver, but the image has $(ls /usr/lib/modules)" >&2; exit 1; }
+work=$(mktemp -d)
+cp -R "$SRCDIR/mechumu/kmod/comet-board/." "$work"  # build.sh mounts this repo at $SRCDIR/mechumu
+make -s -C "/usr/src/kernels/$kver" M="$work" modules
+install -D -m 0644 "$work/comet-board.ko" "$DESTDIR/usr/lib/modules/$kver/extra/comet-board.ko"

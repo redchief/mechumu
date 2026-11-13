@@ -79,8 +79,10 @@ if [[ -n $FRAME ]]; then
     (sleep 2; open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || true) &
 fi
 
+# acpi=off: the firmware hands Linux a devicetree, as a Comet's bootloader does; the onboard
+# sensors' drivers take their configuration from it (kmod/comet-board).
 exec qemu-system-aarch64 \
-    -machine virt \
+    -machine virt,acpi=off \
     "${ACCEL[@]}" \
     -smp 4 \
     -m 4096 \

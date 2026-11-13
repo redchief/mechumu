@@ -75,8 +75,15 @@ cd "$SRC/mecha-make"
 rm -f mkosi.env
 # Optional MECHA_USER_PASSWORD / MECHANIX_LOCKSCREEN_PIN; unset, the mecha account ships locked.
 [[ -f $HERE/mechumu.env ]] && install -m 0600 "$HERE/mechumu.env" mkosi.env
+# The comet-board kernel module (kmod/) is built inside the image build, against the image's kernel.
+# Its workspace on the cache volume: the build overlay can't stack on a container's own overlayfs.
+mkdir -p "$CACHE/mkosi-workspace"
 mkosi --profile=virt --image-version="$(date -u +%Y%m%d-%H%M)" \
-    --environment=MECHA_COMMIT_SHA="mechumu-${MECHUMU_REV:-local}" -f build
+    --environment=MECHA_COMMIT_SHA="mechumu-${MECHUMU_REV:-local}" \
+    --build-package="kernel-devel-7.1.5-0.mecha.*" --build-package=gcc --build-package=make \
+    --build-package=elfutils-libelf-devel \
+    --build-sources="$HERE:mechumu" --build-script="$HERE/build/comet-board.build.chroot" \
+    --workspace-directory="$CACHE/mkosi-workspace" -f build
 
 echo "==> $OUT"
 mkdir -p "$OUT"
