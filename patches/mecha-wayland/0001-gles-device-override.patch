@@ -1,0 +1,29 @@
+Subject: renderer: MECHA_GLES_DEVICE overrides the DRM render node
+
+On GPUs without 3D (QEMU virtio-gpu without host GL), GBM can only allocate dumb
+buffers, which render nodes refuse; such systems point this at a primary node
+(/dev/dri/card0). The rewritten gles crate on `dev` has the same render-node-only
+lookup (crates/gles/src/egl.rs render_node) and needs the same opt-in.
+
+Upstream: mecha-org/mecha-wayland, against main f43c416.
+
+diff --git a/crates/renderer/src/lib.rs b/crates/renderer/src/lib.rs
+index d341ec1..97556bd 100644
+--- a/crates/renderer/src/lib.rs
++++ b/crates/renderer/src/lib.rs
+@@ -503,6 +503,15 @@ impl Drop for Renderer {
+ }
+ 
+ fn open_drm_render_node() -> Result<std::fs::File> {
++    // Emulators whose GPU has no 3D (e.g. QEMU virtio-gpu on macOS) can only allocate dumb buffers,
++    // which render nodes refuse; they opt in to a primary node such as /dev/dri/card0.
++    if let Some(path) = std::env::var_os("MECHA_GLES_DEVICE") {
++        return std::fs::OpenOptions::new()
++            .read(true)
++            .write(true)
++            .open(&path)
++            .with_context(|| format!("open MECHA_GLES_DEVICE {}", path.to_string_lossy()));
++    }
+     for i in 128..=255 {
+         let path = format!("/dev/dri/renderD{}", i);
+         if let Ok(f) = std::fs::OpenOptions::new()

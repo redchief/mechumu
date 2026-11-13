@@ -1,0 +1,5 @@
+# Built or downloaded images, and the VM's control socket
+out/
+# Optional build credentials (see README); never commit
+mechumu.env
+__pycache__/

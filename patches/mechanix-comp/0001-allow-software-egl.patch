@@ -1,0 +1,23 @@
+Subject: udev backend: let emulators opt in to a software EGL renderer
+
+QEMU's virtio-gpu without host GL (e.g. on macOS) only offers llvmpipe, which the
+compositor skips. MECHANIX_ALLOW_SOFTWARE_EGL=1 accepts it.
+
+Upstream: mecha-org/mechanix-comp, against main c0d551b (packaged 1.0.0-2).
+
+diff --git a/src/backend/udev.rs b/src/backend/udev.rs
+index b25e5ab..a313652 100644
+--- a/src/backend/udev.rs
++++ b/src/backend/udev.rs
+@@ -521,9 +521,11 @@ impl State<UdevData> {
+                 }
+             };
+             let egl_device = EGLDevice::device_for_display(&egl_display).ok();
++            // Emulators without host GL (e.g. QEMU virtio-gpu on macOS) only have llvmpipe; let them opt in.
+             if egl_device
+                 .as_ref()
+                 .is_some_and(|device| device.is_software())
++                && std::env::var_os("MECHANIX_ALLOW_SOFTWARE_EGL").is_none()
+             {
+                 warn!("Ignoring {node}: software EGL renderer");
+                 return Ok(());
