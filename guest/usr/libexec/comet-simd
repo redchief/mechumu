@@ -1,6 +1,7 @@
 #!/usr/bin/python3
-"""Virtual Comet hardware: GPIO header (gpio-sim), CAN (vcan), battery (mock UPower), hardware
-buttons (uinput) and the extension connector (USB/IP from the host's `mechumu` hub).
+"""Virtual Comet hardware: CAN (vcan), battery (mock UPower), hardware buttons (uinput) and the
+extension connector (USB/IP from the host's `mechumu` hub; its GPIO, ADC and I2C pins are a DLN-2
+adapter there, so `mechumu ctl gpio/adc` never reach this daemon).
 
 Sets the devices up, then applies one-line commands from the host's control
 port (virtio-serial org.mecha.comet.ctl, held by the host's hub: `mechumu ctl` / `mechumu ext`) and
@@ -10,8 +11,6 @@ import fcntl, glob, os, socket, struct, subprocess, sys, threading, time
 import dbus
 
 PORT = "/dev/virtio-ports/org.mecha.comet.ctl"
-SIM = "/sys/kernel/config/gpio-sim/comet"
-GPIO_LINES = 16
 UPOWER = "org.freedesktop.UPower"
 DISPLAY_DEV = "/org/freedesktop/UPower/devices/DisplayDevice"
 # UPower Device.State values
@@ -20,24 +19,6 @@ STATES = {"charging": 1, "discharging": 2, "full": 4}
 
 def sh(*cmd):
     subprocess.run(cmd, check=True, capture_output=True)
-
-
-def setup_gpio():
-    if not os.path.isdir(SIM):
-        sh("modprobe", "gpio-sim")
-        os.makedirs(f"{SIM}/bank0")
-        open(f"{SIM}/bank0/label", "w").write("comet-ext-gpio")
-        open(f"{SIM}/bank0/num_lines", "w").write(str(GPIO_LINES))
-        for n in range(GPIO_LINES):
-            os.makedirs(f"{SIM}/bank0/line{n}")
-            open(f"{SIM}/bank0/line{n}/name", "w").write(f"EXT_GPIO{n}")
-        open(f"{SIM}/live", "w").write("1")
-
-
-def gpio_dir():
-    dev = open(f"{SIM}/dev_name").read().strip()
-    chip = open(f"{SIM}/bank0/chip_name").read().strip()
-    return f"/sys/devices/platform/{dev}/{chip}"
 
 
 def setup_can():
@@ -81,7 +62,8 @@ def key_event(button, value):
 # --- extension connector -----------------------------------------------------------------------
 # The host's hub serves the connector's USB devices over USB/IP at 10.0.2.2:3240 (QEMU user
 # networking's address for the host): bus ID 1-1 is the attached extension, 1-2 the connector's
-# I2C pins (an i2c-tiny-usb adapter, linked as /dev/i2c-comet-ext by our udev rule).
+# low-speed pins (a DLN-2 adapter: I2C as /dev/i2c-comet-ext, GPIO as /dev/gpiochip-comet-ext, ADC
+# as an IIO device; see 70-comet-sim.rules).
 VHCI = "/sys/devices/platform/vhci_hcd.0"
 HUB = ("10.0.2.2", 3240)
 ports = {}  # bus ID -> vhci port
@@ -191,16 +173,6 @@ def handle(line):
             raise ValueError("usage: battery <0-100> [charging|discharging|full]")
         set_battery(percent, state)
         return f"battery {percent:g}% {state}"
-    if cmd == "gpio" and not args:
-        d = gpio_dir()
-        return " ".join(f"{n}={open(f'{d}/sim_gpio{n}/value').read().strip()}" for n in range(GPIO_LINES))
-    if cmd == "gpio" and len(args) == 2 and args[1] in ("0", "1"):
-        n = int(args[0])
-        if not 0 <= n < GPIO_LINES:
-            raise ValueError(f"line must be 0-{GPIO_LINES - 1}")
-        # The pull is what an external signal on an input pin looks like to gpiod readers.
-        open(f"{gpio_dir()}/sim_gpio{n}/pull", "w").write("pull-up" if args[1] == "1" else "pull-down")
-        return f"EXT_GPIO{n} driven {args[1]}"
     if cmd == "can" and len(args) == 1:
         sh("cansend", "can0", args[0])  # e.g. 123#DEADBEEF, as if sent by an extension
         return f"can0 <- {args[0]}"
@@ -223,12 +195,10 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: battery <pct> [state] | gpio [<line> <0|1>] | can <id>#<hex>"
-                     " | button power|home|volup|voldown | usb")
+    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | usb")
 
 
 def main():
-    setup_gpio()
     setup_can()
     setup_buttons()
     setup_connector()
@@ -238,7 +208,7 @@ def main():
             break
         except dbus.DBusException:
             time.sleep(0.2)
-    print(f"comet-simd: gpio {glob.glob('/dev/gpiochip*')}, can0, battery, buttons, connector ready", flush=True)
+    print("comet-simd: can0, battery, buttons, connector ready", flush=True)
     if os.environ.get("NOTIFY_SOCKET"):  # Type=notify: the button devices exist now
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as n:
             n.sendto(b"READY=1", os.environ["NOTIFY_SOCKET"].replace("@", "\0", 1))

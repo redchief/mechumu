@@ -8,8 +8,9 @@
 
 Runs alongside QEMU (`mechumu run` starts it). The connector's USB pins are a USB/IP server the
 guest imports devices from (port 3240, localhost only): bus ID 1-1 is the attached extension, 1-2
-an always-present i2c-tiny-usb adapter standing in for the connector's I2C pins. comet-simd in the
-guest does the importing when told to over the control port.
+an always-present DLN-2 adapter carrying the connector's I2C, GPIO and ADC pins (connector.Bridge).
+comet-simd in the guest does the importing when told to over the control port. UART1 and UART2 are
+QEMU PCI serial ports whose other ends (uart1.sock, uart2.sock) the hub holds for the model.
 """
 import base64, hashlib, http.server, importlib.util, os, socket, struct, sys, threading, time
 
@@ -25,7 +26,8 @@ EXTENSIONS = os.path.join(os.path.dirname(HERE), "extensions")
 class Hub:
     def __init__(self):
         self.ext, self.name = None, None
-        self.bridge = connector.I2cBridge(lambda: self.ext)
+        self.bridge = connector.Bridge(lambda: self.ext)
+        self.uarts = {1: None, 2: None}
         self.lock = threading.Lock()
         self.port, self.port_lock, self.seq = None, threading.Lock(), 0
 
@@ -70,6 +72,55 @@ class Hub:
                 self.port = None  # unanswered commands die with the connection
                 return "error no answer from the Virtual Comet; is it still booting?"
 
+    def unplug(self):
+        if self.ext:
+            self.ext.connector = None
+        self.ext = self.name = None
+        self.bridge.unplugged()
+
+    # --- pins the hub simulates itself: `mechumu ctl gpio` / `ctl adc` --------------------------
+    def pins(self, cmd, args):
+        b = self.bridge
+        if cmd == "gpio" and not args:
+            return "ok " + " ".join(f"GPIO{i + 1}={'out' if b.gpio_dir[i] else 'in'}:{b.level(i)}"
+                                    for i in range(b.GPIO_PINS))
+        if cmd == "gpio" and len(args) == 2 and args[1] in ("0", "1") and args[0].isdigit() \
+                and 1 <= int(args[0]) <= b.GPIO_PINS:
+            b.drive(int(args[0]) - 1, int(args[1]))
+            return f"ok GPIO{args[0]} driven {args[1]}"
+        if cmd == "adc" and len(args) == 2 and args[0].isdigit() and 1 <= int(args[0]) <= b.ADC_CHANNELS:
+            v = float(args[1])
+            if not 0 <= v <= 3.3:
+                return "error volts must be 0-3.3"
+            b.adc_volts[int(args[0]) - 1] = v
+            return f"ok ADC{args[0]} at {v:g} V"
+        return f"error usage: gpio [<1-{b.GPIO_PINS}> <0|1>] | adc <1-{b.ADC_CHANNELS}> <volts>"
+
+    # --- UART1/UART2: QEMU's PCI serial ports, guest side /dev/comet-uart1|2 ----------------------
+    def serve_uart(self, n):
+        while True:
+            try:
+                sock = socket.socket(socket.AF_UNIX)
+                sock.connect(f"uart{n}.sock")
+            except OSError:
+                time.sleep(0.5)  # QEMU makes the socket once it starts
+                continue
+            self.uarts[n] = sock
+            try:
+                while data := sock.recv(4096):
+                    if self.ext:
+                        self.ext.on_uart(n, data)
+            except OSError:
+                pass
+            except Exception as e:  # a model bug mustn't take the UART down
+                print(f"mechumu: {self.name}: on_uart: {e!r}", flush=True)
+            self.uarts[n] = None
+            sock.close()
+
+    def uart_send(self, n, data):
+        if self.uarts.get(n):
+            self.uarts[n].sendall(data)
+
     def guest(self, line):
         reply = self.guest_raw(line)
         if not reply.startswith("ok"):
@@ -81,17 +132,20 @@ class Hub:
         with self.lock:
             if cmd == "attach" and len(args) == 1:
                 ext, name = self.load(args[0])
+                self.unplug()
+                ext.connector = self
                 self.ext, self.name = ext, name  # the guest's attach swaps out any previous one
                 try:
                     self.guest("ext attach 1-1")
                 except Exception:
-                    self.ext = self.name = None
+                    self.unplug()
                     raise
                 return f"{name} attached"
             if cmd == "detach" and not args:
                 if not self.ext:
                     return "nothing attached"
-                name, self.ext, self.name = self.name, None, None
+                name = self.name
+                self.unplug()
                 self.guest("ext detach 1-1")
                 return f"{name} detached"
             if cmd == "status" and not args:
@@ -123,7 +177,13 @@ class Hub:
             threading.Thread(target=self.control_conn, args=(conn,), daemon=True).start()
 
     def reply(self, line):
-        if line.startswith("ctl "):  # `mechumu ctl`: straight through to comet-simd
+        if line.startswith(("ctl gpio", "ctl adc")):
+            cmd, *args = line[4:].split()
+            try:
+                return self.pins(cmd, args)
+            except ValueError as e:
+                return f"error {e}"
+        if line.startswith("ctl "):  # the rest of `mechumu ctl`: straight through to comet-simd
             return self.guest_raw(line[4:])
         try:
             return "ok " + self.handle(line)
@@ -235,6 +295,8 @@ def main():
     control.listen()
     for target, sock in ((hub.serve_usbip, usbip), (hub.serve_control, control)):
         threading.Thread(target=target, args=(sock,), daemon=True).start()
+    for n in (1, 2):
+        threading.Thread(target=hub.serve_uart, args=(n,), daemon=True).start()
     Frame.hub = hub
     frame = http.server.ThreadingHTTPServer(("127.0.0.1", FRAME_PORT), Frame)
     threading.Thread(target=frame.serve_forever, daemon=True).start()

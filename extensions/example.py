@@ -6,16 +6,22 @@ guest's USB stack and the connector's I2C transfers are answered by its i2c_* me
 guest's own drivers and your apps talk to it exactly as they would to the hardware.
 
 This one is a macro pad (four keys, a USB HID keyboard) with a TMP102 temperature sensor on the
-connector's I2C bus. Try it:
+connector's I2C bus, an LED on GPIO1, a knob (potentiometer) on ADC1 and a debug console on UART1.
+Try it:
 
   mechumu ext attach extensions/example.py
   mechumu ext press 2                   # the pad's second key types F14
   mechumu ext temp 31.5                 # what the sensor will read
+  mechumu ext knob 2.2                  # turn the knob: ADC1 reads 2.2 V
+  mechumu ext led                       # is the LED on?
 
 and in the Virtual Comet (ssh -p 2222 root@localhost):
 
   echo tmp102 0x48 > /sys/class/i2c-dev/$(basename $(readlink /dev/i2c-comet-ext))/device/new_device
   cat /sys/class/hwmon/hwmon*/temp1_input       # 31500: millidegrees, from this model
+  gpioset -c gpiochip-comet-ext -t 0 0=1        # light the LED (GPIO1 is line 0)
+  cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw   # the knob, 0-1023
+  echo hi > /dev/comet-uart1                    # the console answers on UART1
 
 `mechumu ext attach` reloads the file, so edit, re-attach, repeat. Errors in your model show up in
 out/hub.log.
@@ -50,6 +56,7 @@ class Extension(HidDevice):
 
     def __init__(self):
         super().__init__()
+        self.led, self.knob = 0, 1.0
         self.reg, self.temp = 0, 25.0
         # TMP102 registers (datasheet SBOS397): 0 temperature, 1 configuration, 2/3 alert limits.
         self.regs = {1: b"\x60\xa0", 2: self.celsius(75.0), 3: self.celsius(80.0)}
@@ -77,6 +84,21 @@ class Extension(HidDevice):
             return super().i2c_read(addr, n)
         return (self.celsius(self.temp) if self.reg == 0 else self.regs[self.reg])[:n]
 
+    # --- the connector's GPIO, ADC and UART pins ----------------------------------------------
+    def on_gpio(self, n, value):
+        """The Comet drove GPIO<n> as an output: GPIO1 is our LED."""
+        if n == 1:
+            self.led = value
+
+    def adc(self, n):
+        """The Comet samples ADC<n>: ADC1 is the knob's wiper, 0-3.3 V."""
+        return self.knob if n == 1 else None
+
+    def on_uart(self, n, data):
+        """Bytes from the Comet on UART<n>: a tiny console that echoes lines back on UART1."""
+        if n == 1:
+            self.uart_send(1, b"macro-pad: " + data)
+
     # --- driving it from the host: `mechumu ext <command...>` --------------------------------
     def command(self, args):
         cmd, *rest = args
@@ -87,4 +109,9 @@ class Extension(HidDevice):
         if cmd == "temp" and len(rest) == 1:
             self.temp = float(rest[0])
             return f"sensor now reads {float(rest[0]):g} °C"
-        raise ValueError("commands: press <1-4> | temp <celsius>")
+        if cmd == "knob" and len(rest) == 1 and 0 <= float(rest[0]) <= 3.3:
+            self.knob = float(rest[0])
+            return f"knob at {self.knob:g} V"
+        if cmd == "led" and not rest:
+            return "LED on" if self.led else "LED off"
+        raise ValueError("commands: press <1-4> | temp <celsius> | knob <0-3.3> | led")

@@ -300,13 +300,13 @@ function renderGamepad() {
 const PINS = ["ADC1","5V","ADC2","USB D−","PWM3","USB D+","UART2 TX","GND","UART2 RX","CAN TX","SAI2 MCLK","CAN RX","SAI2 TXFS","GPIO1",
   "SAI2 TXC","I2C5 SCL","SAI2 TXD","I2C5 SDA","SAI2 RXD","3.3V","5V","ADC4","SYS nRST","ADC3","RTC CLKOUT","PWM4","GND","GPIO5",
   "UART1 TX","GPIO4","UART1 RX","SPI2 SS0","GPIO3","SPI2 SCLK","I2C6 SDA","SPI2 MISO","I2C6 SCL","SPI2 MOSI","3.3V","GPIO2"];
-const SIMULATED = /USB|I2C6|CAN|GPIO/;
+const SIMULATED = /USB|I2C6|CAN|GPIO|ADC|UART/;
 async function renderBreakout() {
   $("#bay").className = "bay breakout";
   const odd = PINS.filter((_, i) => i % 2 === 0), even = PINS.filter((_, i) => i % 2 === 1);
   const cells = (row) => row.map((p) => `<span class="${SIMULATED.test(p) ? "sim" : ""}" title="${p}${SIMULATED.test(p) ? " (simulated)" : ""}"></span>`).join("");
   $("#bay").innerHTML = `<div class="header">${cells(odd)}${cells(even)}</div><p id="uart">CP2102 UART…</p>
-    <p>Hover a pin for its signal; outlined pins are simulated (USB, the I2C bus at <code>/dev/i2c-comet-ext</code>, CAN as <code>can0</code>, GPIO via <code>mechumu ctl gpio</code>).</p>`;
+    <p>Hover a pin for its signal. Outlined pins are simulated: USB; I2C at <code>/dev/i2c-comet-ext</code>; GPIO1–5 on <code>/dev/gpiochip-comet-ext</code>; ADC1–4 as IIO; UART1/2 at <code>/dev/comet-uart1</code>, <code>2</code>; CAN as <code>can0</code>. Drive them with <code>mechumu ctl gpio</code> / <code>adc</code>.</p>`;
   const r = await cmd("uart", true);
   const m = r.match(/at (\S+)/);
   $("#uart").innerHTML = m ? `USB-C (CP2102) UART: <code>/dev/ttyUSB0</code> in the Comet, <code>${m[1]}</code> on this computer (<code>screen ${m[1]} 115200</code>)` : r;

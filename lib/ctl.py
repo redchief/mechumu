@@ -1,8 +1,9 @@
 """mechumu ctl: drive the running Virtual Comet's simulated hardware.
 
   mechumu ctl battery 15 discharging     # also: charging, full
-  mechumu ctl gpio 3 1                   # drive EXT_GPIO3 high, as an external signal would
-  mechumu ctl gpio                       # read all 16 header lines
+  mechumu ctl gpio 3 1                   # drive connector pin GPIO3 high, as an extension would
+  mechumu ctl gpio                       # GPIO1-5: direction and level
+  mechumu ctl adc 1 1.65                 # put 1.65 V on connector pin ADC1 (0-3.3)
   mechumu ctl can 123#DEADBEEF           # inject a frame on can0, as if from an extension
   mechumu ctl button home                # press a hardware button: power, home, volup, voldown
 

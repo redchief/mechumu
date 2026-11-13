@@ -13,9 +13,9 @@ usage: mechumu <command> [options]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
         --frame shows the whole device in your browser: buttons, extension bay.
         --app boots straight into one app, e.g. --app org.mechanix.clock
-  ctl battery <0-100> [charging|discharging|full] | gpio [<0-15> <0|1>] | can <id>#<hex>
-      | button power|home|volup|voldown
-        Drive the running Virtual Comet's simulated battery, GPIO header, CAN bus and buttons.
+  ctl battery <0-100> [charging|discharging|full] | gpio [<1-5> <0|1>] | adc <1-4> <volts>
+      | can <id>#<hex> | button power|home|volup|voldown
+        Drive the running Virtual Comet's battery, connector pins, CAN bus and buttons.
   ext attach <keyboard|gamepad|io-breakout|model.py> | detach | status | <command...>
         Snap an extension onto the running Virtual Comet's connector, or drive the attached one.
   evk [-- <qemu args>]

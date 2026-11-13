@@ -12,7 +12,7 @@ trap 'kill $qemu 2>/dev/null || true; rm -f "$log"' EXIT
 
 echo "booting (serial log: $log)"
 for _ in $(seq 60); do
-    ./mechumu ctl gpio >/dev/null 2>&1 && break
+    ./mechumu ctl usb 2>/dev/null | grep -q "Comet extension connector" && break  # guest up, connector attached
     kill -0 $qemu 2>/dev/null || { cat "$log"; echo "FAIL: qemu exited"; exit 1; }
     sleep 2
 done
@@ -25,13 +25,14 @@ expect() {  # expect <text in reply> <mechumu args...>
     echo "ok   mechumu $* -> $out"
 }
 expect "ok battery 42% charging" ctl battery 42 charging
-expect "ok EXT_GPIO3 driven 1" ctl gpio 3 1
-expect " 3=1 " ctl gpio
+expect "ok GPIO3 driven 1" ctl gpio 3 1
+expect "GPIO3=in:1" ctl gpio
+expect "ok ADC1 at 1.65 V" ctl adc 1 1.65
 expect "ok can0 <- 123#DEADBEEF" ctl can 123#DEADBEEF
 expect "error usage: battery" ctl battery 101 charging
 expect "ok home pressed" ctl button home
-# The connector's I2C adapter is always there; extensions come and go on its USB pins.
-expect "Comet extension connector I2C" ctl usb
+# The connector's pin bridge is always there; extensions come and go on its USB pins.
+expect "Comet extension connector" ctl usb
 expect "ok keyboard attached" ext attach keyboard
 expect "Comet Keyboard" ctl usb
 expect "ok typed 5 characters" ext type hello

@@ -4,6 +4,11 @@ SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Home Button", SYMLINK+
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Volume Up", SYMLINK+="input/comet-volup"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Volume Down", SYMLINK+="input/comet-voldown"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Extension Detect", SYMLINK+="input/comet-extension"
-# The extension connector's I2C pins: the host hub's i2c-tiny-usb adapter. Group input, like the
-# connector's other half (its USB input devices), so mechanix-extension-service can probe it.
-SUBSYSTEM=="i2c-dev", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="c631", SYMLINK+="i2c-comet-ext", GROUP="input", MODE="0660"
+# The extension connector's low-speed pins: the host hub's DLN-2 adapter (USB a257:2013).
+# I2C: group input, like the connector's USB input devices, so mechanix-extension-service can probe it.
+SUBSYSTEM=="i2c-dev", ATTRS{idVendor}=="a257", ATTRS{idProduct}=="2013", SYMLINK+="i2c-comet-ext", GROUP="input", MODE="0660"
+# GPIO1-5 as lines 0-4 (Fedora's rules already give gpiochips to group gpio).
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", ATTRS{idVendor}=="a257", ATTRS{idProduct}=="2013", SYMLINK+="gpiochip-comet-ext"
+# UART1 and UART2: QEMU PCI serial ports at fixed addresses (lib/run-virt.sh).
+SUBSYSTEM=="tty", KERNELS=="0000:00:1e.0", SYMLINK+="comet-uart1", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="tty", KERNELS=="0000:00:1f.0", SYMLINK+="comet-uart2", GROUP="gpio", MODE="0660"

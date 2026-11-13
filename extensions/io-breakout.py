@@ -6,7 +6,8 @@ that UART, the breakout's USB-C port, is a terminal on your machine:
 
   mechumu ext uart             # prints its path; open it with e.g. `screen <path> 115200`
 
-The header's pins are the Virtual Comet's simulated GPIO, CAN and I2C (see `mechumu ctl`).
+The header's pins are the connector's simulated I2C, GPIO, ADC, UART and CAN: drive them from the
+host with `mechumu ctl gpio` / `adc`, or write a model of what you'd wire to them (extensions/example.py).
 """
 import os, struct, threading, tty
 from connector import Device, ep, iface

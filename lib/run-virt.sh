@@ -70,7 +70,8 @@ for key in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do
     break
 done
 
-# The extension connector (`mechumu ext`); it exits when QEMU, which takes over this process, does.
+# The extension connector (`mechumu ext`): USB/IP for the connector's USB, I2C, GPIO and ADC pins,
+# and the other ends of UART1/UART2 above. It exits when QEMU, which takes over this process, does.
 python3 "$LIB/hub.py" >hub.log 2>&1 &
 if [[ -n $FRAME ]]; then
     url=http://127.0.0.1:8090/
@@ -97,6 +98,10 @@ exec qemu-system-aarch64 \
     -device virtio-serial-pci \
     -chardev socket,id=cometctl,path=comet-ctl.sock,server=on,wait=off \
     -device virtserialport,chardev=cometctl,name=org.mecha.comet.ctl \
+    -chardev socket,id=uart1,path=uart1.sock,server=on,wait=off \
+    -device pci-serial,chardev=uart1,addr=0x1e \
+    -chardev socket,id=uart2,path=uart2.sock,server=on,wait=off \
+    -device pci-serial,chardev=uart2,addr=0x1f \
     -serial mon:stdio \
     ${CREDS[@]+"${CREDS[@]}"} \
     "$@"

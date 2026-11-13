@@ -3,9 +3,9 @@
 A virtual [Mecha Comet](https://mecha.so) you can run on your laptop. mechumu
 boots the real Comet software (the Mecha Linux kernel, Mechanix OS and its apps)
 in QEMU, at native speed on Apple Silicon and arm64 Linux. It simulates the
-Comet's hardware buttons, battery, GPIO and CAN, and its 40-pin extension
-connector: snap on the Keyboard, Gamepad or IO Breakout extension, or one you're
-designing, without a device.
+Comet's hardware buttons and battery, and its 40-pin extension connector (USB,
+I2C, GPIO, ADC, UART and CAN): snap on the Keyboard, Gamepad or IO Breakout
+extension, or one you're designing, without a device.
 
 <p>
   <img src="docs/home.png" width="270" alt="The Mechanix app drawer running in mechumu">
@@ -66,8 +66,9 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 
 ```sh
 ./mechumu ctl battery 15 discharging   # level 0-100; charging, discharging or full
-./mechumu ctl gpio 3 1                 # drive header line EXT_GPIO3 high
-./mechumu ctl gpio                     # read all 16 lines
+./mechumu ctl gpio 3 1                 # drive connector pin GPIO3 high
+./mechumu ctl gpio                     # GPIO1-5: direction and level
+./mechumu ctl adc 1 1.65               # put 1.65 V on connector pin ADC1
 ./mechumu ctl can 123#DEADBEEF         # inject a CAN frame on can0
 ./mechumu ctl button home              # press a button: power, home, volup, voldown
 ```
@@ -75,12 +76,17 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Comet hardware | Inside the Virtual Comet | Read it with |
 |---|---|---|
 | Battery (BQ27441, 5.29 Wh) | A UPower and power-profiles service on D-Bus | Settings → Battery, the UPower D-Bus API |
-| GPIO header | `gpio-sim` chip `comet-ext-gpio`, lines `EXT_GPIO0`–`EXT_GPIO15` | `gpioget`, libgpiod (user `mecha` is in group `gpio`) |
+| Connector GPIO1–5 | Lines 0–4 of `/dev/gpiochip-comet-ext`, with interrupts | `gpioget`, `gpiomon`, libgpiod (user `mecha` is in group `gpio`) |
+| Connector ADC1–4 | An IIO ADC, 10 bits over 3.3 V | `/sys/bus/iio/devices/iio:device0/in_voltage<0-3>_raw` |
+| Connector I2C | `/dev/i2c-comet-ext` | `i2c-dev`, kernel drivers via `new_device` |
+| Connector UART1, UART2 | `/dev/comet-uart1`, `/dev/comet-uart2` (16550s) | Any serial program |
 | CAN bus | Virtual CAN interface `can0` | `candump can0`, SocketCAN |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
-A daemon in the guest, `comet-simd`, applies these commands. It receives them
-over a virtio serial port, which works on every host QEMU runs on.
+The connector's pins carry whatever the attached extension does (see
+[Extensions](#extensions)); `ctl gpio` and `ctl adc` act as an extension would.
+Inside the guest, `comet-simd` applies the other commands, which reach it over a
+virtio serial port.
 
 ### Extensions
 
@@ -111,15 +117,18 @@ Attaching or removing an extension also does what it does on a device:
 
 - The connector's "extension detect" input (`KEY_F24`) changes, and
   `mechanix-system-service` reports it on D-Bus.
-- Mecha's extension detector, `mechanix-extension-service`, probes the
-  connector's I2C bus and announces the extension as `org.mechanix.Extensions`
-  on the session bus.
+- Mecha's extension service, `mechanix-extension-service`, recognises the
+  extension's input device by its USB serial number and announces it as
+  `org.mechanix.Extensions` on the session bus. (Its library can also probe for
+  extensions over I2C, which the connector answers, but the service doesn't run
+  that probe yet.)
 
 #### Building your own extension
 
 An extension model is a Python file. [`extensions/example.py`](extensions/example.py)
 is a commented template: a macro pad (a USB HID keyboard with four keys) with a
-TMP102 temperature sensor on the connector's I2C bus. Copy it, then:
+TMP102 temperature sensor on the connector's I2C bus, an LED on GPIO1, a knob on
+ADC1 and a console on UART1. Copy it, then:
 
 ```sh
 ./mechumu ext attach my_extension.py   # attach it again after each edit to reload it
@@ -134,8 +143,9 @@ cat /sys/class/hwmon/hwmon*/temp1_input
 ```
 
 A model describes its USB device (IDs, strings, interfaces and endpoints, or just
-a HID report descriptor) and answers the connector's I2C transfers; the guest's
-own drivers do the rest. [`lib/connector.py`](lib/connector.py) has the base
+a HID report descriptor), answers the connector's I2C transfers (`i2c_write`,
+`i2c_read`), and hears and drives its other pins (`on_gpio` / `set_gpio`, `adc`,
+`on_uart` / `uart_send`); the guest's own drivers do the rest. [`lib/connector.py`](lib/connector.py) has the base
 classes. Errors in a model land in `out/hub.log`.
 
 ### App-only mode
@@ -218,9 +228,11 @@ Mecha's Comet package repository, exactly as on a device.
 The extension connector is a USB/IP server, `lib/hub.py`, which `mechumu run`
 starts next to QEMU. On `ext attach`, `comet-simd` in the guest imports the
 extension's USB device from it into the kernel's `vhci-hcd`, so `usbhid`,
-`cp210x` and friends bind as on real hardware. The connector's I2C pins are an
-always-attached `i2c-tiny-usb` adapter from the same server, linked as
-`/dev/i2c-comet-ext`, whose transfers the attached model answers.
+`cp210x` and friends bind as on real hardware. The connector's I2C, GPIO and ADC
+pins are an always-attached Diolan DLN-2 adapter from the same server, which
+mainline drivers turn into an I2C bus, a gpiochip and an IIO ADC; the hub passes
+each transfer to the attached model. UART1 and UART2 are QEMU PCI serial ports
+whose other ends the hub holds.
 
 The `virt` profile differs from the device image in a few places:
 
@@ -231,7 +243,7 @@ The `virt` profile differs from the device image in a few places:
 ## Limitations
 
 - **IMU:** the ICM-42605 isn't simulated; nothing in Mechanix reads it yet.
-- **Connector pins:** USB and I2C carry real traffic; CAN and GPIO are the simulated `can0` and header lines. The UART, SPI, PWM, ADC and I2S pins aren't simulated yet.
+- **Connector pins:** USB, I2C, GPIO, ADC and the UARTs reach the model; CAN is a guest-side `can0`. SPI registers a controller (`spi0`) but carries no transfers: Linux creates SPI devices from a devicetree, which QEMU's `virt` machine doesn't give the connector. PWM and I2S aren't simulated.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
 - **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. Through VNC the screen gets mouse events, not multi-touch.
