@@ -1,0 +1,10 @@
+[Unit]
+Description=Virtual Comet: mock power profiles daemon
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.UPower.PowerProfiles
+ExecStart=/usr/bin/python3 -m dbusmock --system --template upower_power_profiles_daemon
+
+[Install]
+WantedBy=multi-user.target

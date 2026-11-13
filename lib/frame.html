@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual Comet</title>
+<style>
+  :root {
+    --bg: #101011; --panel: #1b1b1d; --line: #2e2e31; --text: #e8e6e3; --dim: #8d8a86;
+    --body: #2a2a2c; --edge: #3a3a3d; --key: #0f0f10; --key-text: #f2f2f2;
+    --accent: #e07b10; --pogo: #c9a14a; --pad: #e3bf73; --breakout: #e2554a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  main { display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; align-items: flex-start; padding: 24px 16px; }
+
+  /* The Comet: screen on top, extension bay below, buttons on the edges. */
+  .device { position: relative; width: min(400px, calc(100vw - 32px)); background: var(--body);
+            border: 1px solid var(--edge); border-radius: 28px; padding: 14px 14px 18px; }
+  .screen { aspect-ratio: 1080 / 1240; background: #000; border-radius: 14px; overflow: hidden; position: relative; }
+  #vnc { position: absolute; inset: 0; }
+  .screen .hint { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px; }
+  .hw { position: absolute; background: var(--edge); border: 0; border-radius: 3px; cursor: pointer; padding: 0; }
+  .hw:hover { background: var(--accent); }
+  .hw:active { transform: scale(.94); }
+  .hw.power { right: -5px; top: 70px; width: 5px; height: 46px; }
+  .hw.volup { left: -5px; top: 70px; width: 5px; height: 40px; }
+  .hw.voldown { left: -5px; top: 116px; width: 5px; height: 40px; }
+  .home { display: block; margin: 12px auto 0; width: 64px; height: 18px; border-radius: 9px; border: 1px solid var(--edge);
+          background: #19191a; cursor: pointer; }
+  .home:hover { border-color: var(--accent); }
+  .bay { margin-top: 14px; border-radius: 16px; min-height: 120px; }
+
+  /* Extension bay, nothing attached: the 40 pogo pins. */
+  .pogo { background: #19191a; border: 1px solid var(--edge); display: grid; place-items: center; padding: 28px 12px; }
+  .pins { display: grid; grid-template-columns: repeat(20, 1fr); gap: 4px; width: 88%; padding: 8px 10px; background: #0c0c0d; border-radius: 8px; }
+  .pins i { aspect-ratio: 1; border-radius: 50%; background: var(--pogo); }
+
+  /* Keyboard extension */
+  .kbd { background: #3d3d40; padding: 10px; display: grid; gap: 5px; }
+  .kbd .row { display: flex; gap: 5px; }
+  .k { flex: 1 1 0; min-width: 0; height: 34px; border: 0; border-radius: 5px; background: var(--key); color: var(--key-text);
+       font: 600 12px system-ui; cursor: pointer; padding: 0; }
+  .k.wide { flex-grow: 1.6; } .k.space { flex-grow: 4.2; }
+  .k:active, .k.down { background: var(--accent); color: #000; }
+  .k.sticky { outline: 2px solid var(--accent); }
+  .k.off { opacity: .45; cursor: not-allowed; }
+  .kbd .top { display: flex; justify-content: space-between; align-items: center; padding: 2px 8px 6px; }
+  .kbd .top i { width: 44px; height: 18px; border-radius: 9px; background: var(--key); opacity: .45; }
+  .kbd .top i.round { width: 26px; height: 26px; border-radius: 50%; }
+
+  /* Gamepad extension */
+  .pad { background: var(--pad); padding: 16px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; align-items: center; color: #111; }
+  .stick { width: 86px; height: 86px; border-radius: 50%; background: #2a2a2a; position: relative; touch-action: none; cursor: grab; justify-self: center; }
+  .stick b { position: absolute; width: 46px; height: 46px; left: 20px; top: 20px; border-radius: 50%; background: #111; pointer-events: none; }
+  .abxy { position: relative; width: 110px; height: 110px; justify-self: center; }
+  .abxy button, .dpad button, .pad .small, .pad .round { position: absolute; border: 0; background: #1d1d1d; color: #f0f0f0; font: 700 14px system-ui; cursor: pointer; }
+  .abxy button { width: 36px; height: 36px; border-radius: 50%; }
+  .abxy [data-b=y] { left: 37px; top: 0; } .abxy [data-b=x] { left: 0; top: 37px; }
+  .abxy [data-b=b] { left: 74px; top: 37px; } .abxy [data-b=a] { left: 37px; top: 74px; }
+  .dpad { position: relative; width: 100px; height: 100px; justify-self: center; }
+  .dpad button { width: 34px; height: 34px; border-radius: 6px; }
+  .dpad [data-d=up] { left: 33px; top: 0; } .dpad [data-d=left] { left: 0; top: 33px; }
+  .dpad [data-d=right] { left: 66px; top: 33px; } .dpad [data-d=down] { left: 33px; top: 66px; }
+  .pad .mid { display: flex; gap: 10px; justify-content: center; }
+  .pad .small, .pad .round { position: static; }
+  .pad .small { width: 36px; height: 12px; border-radius: 6px; transform: rotate(-35deg); }
+  .pad .round { width: 30px; height: 30px; border-radius: 50%; }
+  .pad button:active, .pad button.down { background: var(--accent); color: #000; }
+
+  /* IO breakout extension */
+  .breakout { background: var(--breakout); padding: 14px; color: #fff; }
+  .header { display: grid; grid-template-columns: repeat(20, 1fr); gap: 2px; background: #2b2b2b; padding: 4px; border-radius: 4px; }
+  .header span { aspect-ratio: 1; background: #111; border: 2px solid #555; cursor: help; }
+  .header span.sim { border-color: var(--pad); }
+  .breakout p { margin: 8px 0 0; font-size: 12px; }
+  .breakout code { background: rgba(0,0,0,.25); padding: 1px 4px; border-radius: 3px; }
+
+  .custom { background: #19191a; border: 1px solid var(--edge); padding: 16px; }
+  .custom form { display: flex; gap: 6px; margin-top: 8px; }
+
+  /* Side panel */
+  .panel { width: min(340px, calc(100vw - 32px)); display: grid; gap: 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+  .choices { display: flex; flex-wrap: wrap; gap: 6px; }
+  .choices button, .panel button, .custom button { background: #26262a; color: var(--text); border: 1px solid var(--line);
+       border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+  .choices button[aria-pressed=true] { border-color: var(--accent); color: var(--accent); }
+  input, select { background: #111; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0; }
+  .row2 { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .row2 input[type=range] { flex: 1; }
+  #log { font: 12px ui-monospace, monospace; color: var(--dim); white-space: pre-wrap; max-height: 140px; overflow: auto; margin: 0; }
+  .note { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="device" aria-label="Virtual Comet">
+    <button class="hw power" data-btn="power" title="Power" aria-label="Power button"></button>
+    <button class="hw volup" data-btn="volup" title="Volume up" aria-label="Volume up"></button>
+    <button class="hw voldown" data-btn="voldown" title="Volume down" aria-label="Volume down"></button>
+    <div class="screen"><div class="hint" id="hint">Connecting to the screen…</div><div id="vnc"></div></div>
+    <button class="home" data-btn="home" title="Home" aria-label="Home button"></button>
+    <div class="bay" id="bay"></div>
+  </div>
+
+  <div class="panel">
+    <section>
+      <h2>Extension</h2>
+      <div class="choices" id="choices">
+        <button data-ext="">None</button>
+        <button data-ext="keyboard">Keyboard</button>
+        <button data-ext="gamepad">Gamepad</button>
+        <button data-ext="io-breakout">IO Breakout</button>
+      </div>
+      <form class="row2" id="custom-form">
+        <input id="custom-path" placeholder="/path/to/your_extension.py" aria-label="Path to your extension model">
+        <button>Attach</button>
+      </form>
+      <p class="note" id="ext-note"></p>
+    </section>
+    <section>
+      <h2>Battery</h2>
+      <div class="row2">
+        <input type="range" id="bat" min="0" max="100" value="80" aria-label="Battery level">
+        <span id="bat-v">80%</span>
+        <select id="bat-s" aria-label="Battery state"><option>discharging</option><option>charging</option><option>full</option></select>
+      </div>
+    </section>
+    <section>
+      <h2>Activity</h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+// shortcut: noVNC loads from jsdelivr, so the frame's screen needs internet on first load; vendor it if offline use matters.
+import RFB from "https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js";
+
+const $ = (s, el = document) => el.querySelector(s);
+const log = (line) => { const l = $("#log"); l.textContent = (line + "\n" + l.textContent).slice(0, 4000); };
+
+async function cmd(line, quiet) {
+  const r = await fetch("/cmd", { method: "POST", headers: { "X-Mechumu": "1" }, body: line });
+  const text = await r.text();
+  if (!quiet || !text.startsWith("ok")) log(`${line} → ${text}`);
+  return text;
+}
+
+// --- screen ------------------------------------------------------------------------------------
+function connect() {
+  const rfb = new RFB($("#vnc"), `ws://${location.host}/vnc`);
+  rfb.scaleViewport = true;
+  rfb.focusOnClick = false;  // the Comet has no keyboard of its own: keys go to the keyboard extension
+  rfb.addEventListener("connect", () => { $("#hint").hidden = true; });
+  rfb.addEventListener("disconnect", () => { $("#hint").hidden = false; $("#hint").textContent = "Screen disconnected; retrying…"; setTimeout(connect, 2000); });
+}
+connect();
+
+// --- hardware buttons --------------------------------------------------------------------------
+document.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", () => cmd(`ctl button ${b.dataset.btn}`)));
+
+// --- battery -----------------------------------------------------------------------------------
+const bat = () => { $("#bat-v").textContent = `${$("#bat").value}%`; cmd(`ctl battery ${$("#bat").value} ${$("#bat-s").value}`, true); };
+$("#bat").addEventListener("change", bat);
+$("#bat").addEventListener("input", () => { $("#bat-v").textContent = `${$("#bat").value}%`; });
+$("#bat-s").addEventListener("change", bat);
+
+// --- extensions --------------------------------------------------------------------------------
+let attached = null;
+async function attach(spec) {
+  const r = await cmd(spec ? `attach ${spec}` : "detach");
+  if (r.startsWith("ok")) await refresh();
+}
+$("#choices").addEventListener("click", (e) => { const b = e.target.closest("[data-ext]"); if (b) attach(b.dataset.ext); });
+$("#custom-form").addEventListener("submit", (e) => { e.preventDefault(); const p = $("#custom-path").value.trim(); if (p) attach(p); });
+
+async function refresh() {
+  const r = await cmd("status", true);
+  const m = r.match(/^ok (.+) attached$/);
+  const name = m && m[1] !== "nothing" ? m[1] : null;
+  if (name === attached && $("#bay").childElementCount) return;
+  attached = name;
+  $("#bay").replaceWith(Object.assign(document.createElement("div"), { id: "bay", className: "bay" }));  // drops the old extension's listeners
+  document.querySelectorAll("#choices [data-ext]").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.ext || null) === name)));
+  render[name] ? render[name]() : render.custom(name);
+}
+setInterval(refresh, 2000);
+
+const render = {
+  null() {
+    $("#bay").className = "bay pogo";
+    $("#bay").innerHTML = `<div class="pins">${"<i></i>".repeat(40)}</div>`;
+    $("#ext-note").textContent = "The 40-pin connector under the magnetic lid. Snap an extension on.";
+  },
+  keyboard: renderKeyboard,
+  gamepad: renderGamepad,
+  "io-breakout": renderBreakout,
+  custom(name) {
+    $("#bay").className = "bay custom";
+    $("#bay").innerHTML = `<strong>${name}</strong><div class="note">Your extension model. Its commands:</div>
+      <form><input placeholder="command, e.g. press 1" aria-label="Command for ${name}" style="flex:1"><button>Send</button></form>`;
+    $("form", $("#bay")).addEventListener("submit", (e) => { e.preventDefault(); const i = $("input", e.target); if (i.value) cmd(i.value); i.value = ""; });
+    $("#ext-note").textContent = "Edit the model, then attach it again to reload it.";
+  },
+};
+
+// Keyboard: HID usages; modifiers are bits in the report's first byte.
+const USAGE = { ...Object.fromEntries("abcdefghijklmnopqrstuvwxyz".split("").map((c, i) => [c, 4 + i])),
+  ...Object.fromEntries("1234567890".split("").map((c, i) => [c, 30 + i])),
+  enter: 40, esc: 41, del: 42, tab: 43, space: 44, "-": 45, "=": 46, "[": 47, "]": 48, "\\": 49, ";": 51, "'": 52, "`": 53,
+  ",": 54, ".": 55, "/": 56, right: 79, left: 80, down: 81, up: 82 };
+const MOD = { ctrl: 1, shift: 2, alt: 4, super: 8 };
+const ROWS = [["q","w","e","r","t","y","u","i","o","p"], ["a","s","d","f","g","h","j","k","l","del"],
+              ["shift","z","x","c","v","b","n","m","enter"], ["ctrl","fn",  "tab", ",", "space", ".", "alt", "fn", "123"]];
+const kb = { mods: 0, keys: new Set(), sticky: 0 };
+const sendKeys = () => cmd(`report ${kb.mods | kb.sticky} ${[...kb.keys].slice(0, 6).join(" ")}`, true);
+
+function renderKeyboard() {
+  $("#bay").className = "bay kbd";
+  $("#bay").innerHTML = `<div class="top"><i></i><i></i><i class="round"></i><i></i><i class="round"></i></div>` +
+    ROWS.map((r) => `<div class="row">${r.map((k) => {
+      const off = k === "fn" || k === "123";
+      const cls = ["k", ["shift","enter","ctrl","del"].includes(k) ? "wide" : "", k === "space" ? "space" : "", off ? "off" : ""].join(" ");
+      return `<button class="${cls}" data-k="${k}" ${off ? 'title="Firmware layer key: not modelled" aria-disabled="true"' : ""}>${k === "space" ? "" : k === "del" ? "⌫" : k === "enter" ? "↵" : k === "shift" ? "⇧" : k}</button>`;
+    }).join("")}</div>`).join("");
+  $("#bay").addEventListener("pointerdown", (e) => {
+    const k = e.target.closest("[data-k]")?.dataset.k;
+    if (!k || k === "fn" || k === "123") return;
+    if (MOD[k]) { kb.sticky ^= MOD[k]; e.target.classList.toggle("sticky", !!(kb.sticky & MOD[k])); sendKeys(); return; }
+    kb.keys.add(USAGE[k]); sendKeys();
+    const up = () => { kb.keys.delete(USAGE[k]); kb.sticky = 0; document.querySelectorAll(".k.sticky").forEach((s) => s.classList.remove("sticky")); sendKeys(); };
+    e.target.addEventListener("pointerup", up, { once: true });
+    e.target.addEventListener("pointerleave", up, { once: true });
+  });
+  $("#ext-note").textContent = "Click keys, or type: your keyboard is the extension while it's attached.";
+}
+
+// Your keyboard types through whichever extension is attached, as the Comet has no keyboard of its own.
+const CODE = { Enter: 40, Escape: 41, Backspace: 42, Tab: 43, Space: 44, Minus: 45, Equal: 46, BracketLeft: 47, BracketRight: 48,
+  Backslash: 49, Semicolon: 51, Quote: 52, Backquote: 53, Comma: 54, Period: 55, Slash: 56,
+  ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82 };
+const CODE_MOD = { ControlLeft: 1, ShiftLeft: 2, AltLeft: 4, MetaLeft: 8, ControlRight: 16, ShiftRight: 32, AltRight: 64, MetaRight: 128 };
+const usageOf = (code) => CODE[code] ?? (/^Key[A-Z]$/.test(code) ? code.charCodeAt(3) - 61 : /^Digit\d$/.test(code) ? (code[5] === "0" ? 39 : 29 + +code[5]) : /^F([1-9]|1[0-2])$/.test(code) ? 57 + +code.slice(1) : null);
+const PAD_KEYS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+const PAD_BTNS = { KeyZ: "a", KeyX: "b", KeyA: "x", KeyS: "y", KeyQ: "l", KeyW: "r", Enter: "star" };
+
+function onKey(e, down) {
+  if (e.target.closest("input, select, textarea")) return;
+  if (attached === "keyboard") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (CODE_MOD[e.code]) kb.mods = down ? kb.mods | CODE_MOD[e.code] : kb.mods & ~CODE_MOD[e.code];
+    else { const u = usageOf(e.code); if (u == null) return; down ? kb.keys.add(u) : kb.keys.delete(u); }
+    sendKeys();
+  } else if (attached === "gamepad" && (PAD_KEYS[e.code] || PAD_BTNS[e.code])) {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (PAD_KEYS[e.code]) cmd(`dpad ${down ? PAD_KEYS[e.code] : "none"}`, true);
+    else cmd(`${down ? "hold" : "release"} ${PAD_BTNS[e.code]}`, true);
+  }
+}
+addEventListener("keydown", (e) => onKey(e, true));
+addEventListener("keyup", (e) => onKey(e, false));
+
+function renderGamepad() {
+  $("#bay").className = "bay pad";
+  $("#bay").innerHTML = `
+    <div class="stick" aria-label="Analog stick"><b></b></div>
+    <div class="abxy">${["y","x","b","a"].map((b) => `<button data-b="${b}">${b.toUpperCase()}</button>`).join("")}</div>
+    <div class="dpad">${["up","left","right","down"].map((d) => `<button data-d="${d}" aria-label="D-pad ${d}"></button>`).join("")}</div>
+    <div class="mid"><button class="small" data-b="l" aria-label="Left small button"></button><button class="small" data-b="r" aria-label="Right small button"></button>
+      <button class="round" data-b="star" aria-label="Star button">✳</button><button class="round" data-b="thumb" aria-label="Round button"></button></div>`;
+  $("#bay").addEventListener("pointerdown", (e) => {
+    const b = e.target.closest("[data-b]"), d = e.target.closest("[data-d]");
+    if (!b && !d) return;
+    cmd(b ? `hold ${b.dataset.b}` : `dpad ${d.dataset.d}`, true);
+    const up = () => cmd(b ? `release ${b.dataset.b}` : "dpad none", true);
+    e.target.addEventListener("pointerup", up, { once: true });
+    e.target.addEventListener("pointerleave", up, { once: true });
+  });
+  const stick = $(".stick"), knob = $(".stick b");
+  let last = 0;
+  const move = (e) => {
+    const r = stick.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    let dx = (e.clientX - cx) / (r.width / 2), dy = (e.clientY - cy) / (r.height / 2);
+    const len = Math.hypot(dx, dy); if (len > 1) { dx /= len; dy /= len; }
+    knob.style.transform = `translate(${dx * 20}px, ${dy * 20}px)`;
+    if (Date.now() - last > 60) { last = Date.now(); cmd(`stick ${Math.round(dx * 127)} ${Math.round(dy * 127)}`, true); }
+  };
+  stick.addEventListener("pointerdown", (e) => { stick.setPointerCapture(e.pointerId); move(e); stick.onpointermove = move; });
+  stick.addEventListener("pointerup", () => { stick.onpointermove = null; knob.style.transform = ""; cmd("stick 0 0", true); });
+  $("#ext-note").textContent = "Click and drag, or use your keyboard: arrows = d-pad, Z X A S = A B X Y, Q W = small buttons, Enter = ✳.";
+}
+
+// The connector's pinout (Comet mainboard schematic, J30 + J29), as the breakout's two header rows.
+const PINS = ["ADC1","5V","ADC2","USB D−","PWM3","USB D+","UART2 TX","GND","UART2 RX","CAN TX","SAI2 MCLK","CAN RX","SAI2 TXFS","GPIO1",
+  "SAI2 TXC","I2C5 SCL","SAI2 TXD","I2C5 SDA","SAI2 RXD","3.3V","5V","ADC4","SYS nRST","ADC3","RTC CLKOUT","PWM4","GND","GPIO5",
+  "UART1 TX","GPIO4","UART1 RX","SPI2 SS0","GPIO3","SPI2 SCLK","I2C6 SDA","SPI2 MISO","I2C6 SCL","SPI2 MOSI","3.3V","GPIO2"];
+const SIMULATED = /USB|I2C6|CAN|GPIO/;
+async function renderBreakout() {
+  $("#bay").className = "bay breakout";
+  const odd = PINS.filter((_, i) => i % 2 === 0), even = PINS.filter((_, i) => i % 2 === 1);
+  const cells = (row) => row.map((p) => `<span class="${SIMULATED.test(p) ? "sim" : ""}" title="${p}${SIMULATED.test(p) ? " (simulated)" : ""}"></span>`).join("");
+  $("#bay").innerHTML = `<div class="header">${cells(odd)}${cells(even)}</div><p id="uart">CP2102 UART…</p>
+    <p>Hover a pin for its signal; outlined pins are simulated (USB, the I2C bus at <code>/dev/i2c-comet-ext</code>, CAN as <code>can0</code>, GPIO via <code>mechumu ctl gpio</code>).</p>`;
+  const r = await cmd("uart", true);
+  const m = r.match(/at (\S+)/);
+  $("#uart").innerHTML = m ? `USB-C (CP2102) UART: <code>/dev/ttyUSB0</code> in the Comet, <code>${m[1]}</code> on this computer (<code>screen ${m[1]} 115200</code>)` : r;
+  $("#ext-note").textContent = "The connector's pins on headers, plus a USB-to-UART bridge to this computer.";
+}
+
+refresh();
+</script>
+</body>
+</html>

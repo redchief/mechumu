@@ -1,0 +1,9 @@
+# Stable names for the Virtual Comet's simulated hardware (made by comet-simd).
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Power Button", SYMLINK+="input/comet-power"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Home Button", SYMLINK+="input/comet-home"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Volume Up", SYMLINK+="input/comet-volup"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Volume Down", SYMLINK+="input/comet-voldown"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="Comet Extension Detect", SYMLINK+="input/comet-extension"
+# The extension connector's I2C pins: the host hub's i2c-tiny-usb adapter. Group input, like the
+# connector's other half (its USB input devices), so mechanix-extension-service can probe it.
+SUBSYSTEM=="i2c-dev", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="c631", SYMLINK+="i2c-comet-ext", GROUP="input", MODE="0660"

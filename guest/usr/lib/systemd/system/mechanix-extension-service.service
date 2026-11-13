@@ -1,0 +1,21 @@
+# Mechanix's extension detector (mechanix-gui services/extensions): watches input devices and polls the
+# connector's I2C bus, and announces extensions on the session bus as org.mechanix.Extensions.
+# It's a session-bus service, but enumerating every input device needs the input group, which a user
+# unit can't add; so it runs here as mecha, on mecha's session bus.
+[Unit]
+Description=Mechanix extensions service
+Requires=user@1000.service
+After=user@1000.service comet-simd.service
+
+[Service]
+User=mecha
+SupplementaryGroups=input
+Environment=XDG_RUNTIME_DIR=/run/user/1000 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=MECHANIX_EXTENSION_CONFIG_PATH=/usr/share/mechanix/extensions/config.toml
+Environment=MECHANIX_EXTENSIONS_I2C_BUS=/dev/i2c-comet-ext RUST_LOG=info
+ExecStart=/usr/bin/mechanix-extension-service
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

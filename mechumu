@@ -9,11 +9,15 @@ usage() {
     cat <<'USAGE'
 usage: mechumu <command> [options]
 
-  run [--app <desktop id|command>] [--headless] [-- <qemu args>]
+  run [--app <desktop id|command>] [--frame | --headless] [-- <qemu args>]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
+        --frame shows the whole device in your browser: buttons, extension bay.
         --app boots straight into one app, e.g. --app org.mechanix.clock
   ctl battery <0-100> [charging|discharging|full] | gpio [<0-15> <0|1>] | can <id>#<hex>
-        Drive the running Virtual Comet's simulated battery, GPIO header and CAN bus.
+      | button power|home|volup|voldown
+        Drive the running Virtual Comet's simulated battery, GPIO header, CAN bus and buttons.
+  ext attach <keyboard|gamepad|io-breakout|model.py> | detach | status | <command...>
+        Snap an extension onto the running Virtual Comet's connector, or drive the attached one.
   evk [-- <qemu args>]
         Boot the same kernel and rootfs on QEMU's NXP i.MX8MP EVK model (serial only).
   build
@@ -29,6 +33,7 @@ case $cmd in
     run) exec bash "$HERE/lib/run-virt.sh" "$@" ;;
     evk) exec bash "$HERE/lib/run-evk.sh" "$@" ;;
     ctl) exec python3 "$HERE/lib/ctl.py" "$@" ;;
+    ext) exec python3 "$HERE/lib/ctl.py" --hub "$@" ;;
     build)
         command -v docker >/dev/null || { echo "mechumu build needs Docker; or run build/build.sh as root on Fedora 44 arm64" >&2; exit 1; }
         mkdir -p "$MECHUMU_OUT"
@@ -43,7 +48,8 @@ case $cmd in
             rev=local
         fi
         files | COPYFILE_DISABLE=1 tar --no-xattrs -cf - -T - |
-            docker run -i --rm --privileged \
+            # --init + process-group kill: Ctrl-C stops the whole build, not just this client.
+            docker run -i --rm --privileged --init -e TINI_KILL_PROCESS_GROUP=1 \
                 -v mechumu-cache:/var/cache/mechumu -v "$MECHUMU_OUT":/out -e MECHUMU_REV="$rev" \
                 fedora:44 bash -euc 'mkdir /mechumu && tar -xf - -C /mechumu && /mechumu/build/build.sh /out'
         ;;

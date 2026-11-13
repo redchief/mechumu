@@ -1,6 +1,7 @@
 #!/bin/bash
-# Boots the Virtual Comet headless and drives every simulated device through `mechumu ctl`, end to
-# end through the guest's comet-simd. Needs out/ (built or from a release). Usage: tests/smoke.sh
+# Boots the Virtual Comet headless and drives every simulated device through `mechumu ctl` and every
+# built-in extension through `mechumu ext`, end to end through the guest. Needs out/ (`mechumu build`).
+# Usage: tests/smoke.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,16 +17,29 @@ for _ in $(seq 60); do
     sleep 2
 done
 
-expect() {  # expect <text in reply> <ctl args...>
+expect() {  # expect <text in reply> <mechumu args...>
     local want=$1 out
     shift
-    out=$(./mechumu ctl "$@" 2>&1) || true
-    [[ $out == *"$want"* ]] || { echo "FAIL: ctl $* -> $out (want: $want)"; exit 1; }
-    echo "ok   ctl $* -> $out"
+    out=$(./mechumu "$@" 2>&1) || true
+    [[ $out == *"$want"* ]] || { echo "FAIL: mechumu $* -> $out (want: $want)"; exit 1; }
+    echo "ok   mechumu $* -> $out"
 }
-expect "ok battery 42% charging" battery 42 charging
-expect "ok EXT_GPIO3 driven 1" gpio 3 1
-expect " 3=1 " gpio
-expect "ok can0 <- 123#DEADBEEF" can 123#DEADBEEF
-expect "error usage: battery" battery 101 charging
+expect "ok battery 42% charging" ctl battery 42 charging
+expect "ok EXT_GPIO3 driven 1" ctl gpio 3 1
+expect " 3=1 " ctl gpio
+expect "ok can0 <- 123#DEADBEEF" ctl can 123#DEADBEEF
+expect "error usage: battery" ctl battery 101 charging
+expect "ok home pressed" ctl button home
+# The connector's I2C adapter is always there; extensions come and go on its USB pins.
+expect "Comet extension connector I2C" ctl usb
+expect "ok keyboard attached" ext attach keyboard
+expect "Comet Keyboard" ctl usb
+expect "ok typed 5 characters" ext type hello
+expect "ok gamepad attached" ext attach gamepad
+expect "Comet Gamepad" ctl usb
+expect "ok a pressed" ext press a
+expect "ok io-breakout attached" ext attach io-breakout
+expect "CP2102" ctl usb
+expect "ok io-breakout detached" ext detach
+expect "error nothing attached" ext press a
 echo PASS

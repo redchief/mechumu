@@ -1,0 +1,12 @@
+[Unit]
+Description=Virtual Comet: simulated GPIO, CAN, battery, buttons and extension connector, controlled from the host
+Wants=comet-sim-upower.service
+After=comet-sim-upower.service
+
+[Service]
+Type=notify
+ExecStart=/usr/libexec/comet-simd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

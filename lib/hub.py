@@ -1,0 +1,252 @@
+"""mechumu ext: the Virtual Comet's extension connector.
+
+  mechumu ext attach keyboard        # snap on a built-in extension: keyboard, gamepad, io-breakout
+  mechumu ext attach ./my_ext.py     # or your own model (see extensions/example.py)
+  mechumu ext detach                 # take it off
+  mechumu ext status                 # what's attached
+  mechumu ext <command...>           # drive the attached extension, e.g. `mechumu ext type hello`
+
+Runs alongside QEMU (`mechumu run` starts it). The connector's USB pins are a USB/IP server the
+guest imports devices from (port 3240, localhost only): bus ID 1-1 is the attached extension, 1-2
+an always-present i2c-tiny-usb adapter standing in for the connector's I2C pins. comet-simd in the
+guest does the importing when told to over the control port.
+"""
+import base64, hashlib, http.server, importlib.util, os, socket, struct, sys, threading, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import connector
+
+USBIP_PORT = 3240
+FRAME_PORT = 8090
+EXTENSIONS = os.path.join(os.path.dirname(HERE), "extensions")
+
+
+class Hub:
+    def __init__(self):
+        self.ext, self.name = None, None
+        self.bridge = connector.I2cBridge(lambda: self.ext)
+        self.lock = threading.Lock()
+        self.port, self.port_lock, self.seq = None, threading.Lock(), 0
+
+    def lookup(self, busid):
+        return {"1-1": self.ext, "1-2": self.bridge}.get(busid)
+
+    def load(self, spec):
+        path = spec if spec.endswith(".py") else os.path.join(EXTENSIONS, f"{spec}.py")
+        if not os.path.isfile(path):
+            builtin = sorted(f[:-3] for f in os.listdir(EXTENSIONS) if f.endswith(".py") and f != "example.py")
+            raise ValueError(f"no extension {spec!r}; built in: {', '.join(builtin)}, or a path to a .py model")
+        mod_spec = importlib.util.spec_from_file_location(f"ext_{abs(hash(path))}", path)
+        mod = importlib.util.module_from_spec(mod_spec)
+        mod_spec.loader.exec_module(mod)
+        return mod.Extension(), getattr(mod.Extension, "name", os.path.basename(path)[:-3])
+
+    def guest_raw(self, line, timeout=10):
+        """One command to comet-simd over the control port; returns its "ok ..."/"error ..." line.
+
+        The hub holds the port's only connection, so commands never race a reconnect (a command sent
+        just as the previous client hung up can be lost). Each carries an ID its reply echoes, so a
+        reply that arrives after we gave up on it is never taken for the next command's."""
+        with self.port_lock:
+            self.seq += 1
+            tag = f"#{self.seq} "
+            try:
+                if self.port is None:
+                    self.port = socket.socket(socket.AF_UNIX)
+                    self.port.connect("comet-ctl.sock")
+                    self.port_lines = self.port.makefile("rb")
+                self.port.settimeout(timeout)
+                self.port.sendall((tag + line + "\n").encode())
+                while True:
+                    reply = self.port_lines.readline().decode(errors="replace").strip()
+                    if not reply:
+                        raise ConnectionError("control port closed")
+                    if reply.startswith(tag):
+                        return reply[len(tag):]
+            except (OSError, ConnectionError):
+                if self.port:
+                    self.port.close()
+                self.port = None  # unanswered commands die with the connection
+                return "error no answer from the Virtual Comet; is it still booting?"
+
+    def guest(self, line):
+        reply = self.guest_raw(line)
+        if not reply.startswith("ok"):
+            raise RuntimeError(reply.removeprefix("error "))
+        return reply[3:]
+
+    def handle(self, line):
+        cmd, *args = line.split()
+        with self.lock:
+            if cmd == "attach" and len(args) == 1:
+                ext, name = self.load(args[0])
+                self.ext, self.name = ext, name  # the guest's attach swaps out any previous one
+                try:
+                    self.guest("ext attach 1-1")
+                except Exception:
+                    self.ext = self.name = None
+                    raise
+                return f"{name} attached"
+            if cmd == "detach" and not args:
+                if not self.ext:
+                    return "nothing attached"
+                name, self.ext, self.name = self.name, None, None
+                self.guest("ext detach 1-1")
+                return f"{name} detached"
+            if cmd == "status" and not args:
+                return f"{self.name} attached" if self.ext else "nothing attached"
+            if not self.ext:
+                raise ValueError("nothing attached; try: mechumu ext attach keyboard")
+            return self.ext.command([cmd, *args]) or "done"
+
+    # --- servers -----------------------------------------------------------------------------
+    def serve_usbip(self, sock):
+        while True:
+            conn, _ = sock.accept()
+            threading.Thread(target=self.usbip_conn, args=(conn,), daemon=True).start()
+
+    def usbip_conn(self, sock):
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            imported = connector.handshake(sock, self.lookup)
+            if imported:
+                connector.Connection(sock, imported[1]).serve()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            sock.close()
+
+    def serve_control(self, sock):
+        while True:
+            conn, _ = sock.accept()
+            threading.Thread(target=self.control_conn, args=(conn,), daemon=True).start()
+
+    def reply(self, line):
+        if line.startswith("ctl "):  # `mechumu ctl`: straight through to comet-simd
+            return self.guest_raw(line[4:])
+        try:
+            return "ok " + self.handle(line)
+        except Exception as e:
+            return f"error {e}"
+
+    def control_conn(self, conn):
+        with conn:
+            conn.sendall(self.reply(conn.makefile().readline().strip()).encode() + b"\n")
+
+
+class Frame(http.server.BaseHTTPRequestHandler):
+    """The device frame (`mechumu run --frame`): the page, its commands, and the screen's VNC stream
+    as a WebSocket. Localhost only, and only for the page itself: commands need a header a
+    cross-site request can't send, the WebSocket checks Origin, and Host is checked against DNS
+    rebinding; QEMU's VNC listens on a Unix socket, never on TCP."""
+    hub = None
+
+    def log_message(self, *args):
+        pass
+
+    def allowed(self):
+        return self.headers.get("Host") == f"127.0.0.1:{FRAME_PORT}"
+
+    def do_GET(self):
+        if not self.allowed():
+            return self.send_error(403)
+        if self.path == "/":
+            body = open(os.path.join(HERE, "frame.html"), "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/vnc" and self.headers.get("Upgrade", "").lower() == "websocket":
+            if self.headers.get("Origin") != f"http://127.0.0.1:{FRAME_PORT}":
+                return self.send_error(403)
+            self.websocket_vnc()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if not self.allowed() or self.headers.get("X-Mechumu") != "1" or self.path != "/cmd":
+            return self.send_error(403)
+        line = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode().strip()
+        body = self.hub.reply(line).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def websocket_vnc(self):
+        """RFC 6455, just enough for noVNC: binary frames both ways, to QEMU's VNC socket."""
+        key = self.headers["Sec-WebSocket-Key"].encode() + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", base64.b64encode(hashlib.sha1(key).digest()).decode())
+        self.end_headers()
+        self.wfile.flush()
+        vnc = socket.socket(socket.AF_UNIX)
+        try:
+            vnc.connect("vnc.sock")
+        except OSError:
+            return
+        client = self.connection
+
+        def to_browser():
+            try:
+                while data := vnc.recv(65536):
+                    n = len(data)
+                    hdr = bytes([0x82, n]) if n < 126 else (
+                        struct.pack(">BBH", 0x82, 126, n) if n < 65536 else struct.pack(">BBQ", 0x82, 127, n))
+                    client.sendall(hdr + data)
+            except OSError:
+                pass
+            client.close()
+
+        threading.Thread(target=to_browser, daemon=True).start()
+        read = self.rfile.read
+        try:
+            while True:
+                b0, b1 = read(2)
+                n = b1 & 0x7F
+                n = struct.unpack(">H", read(2))[0] if n == 126 else struct.unpack(">Q", read(8))[0] if n == 127 else n
+                mask = read(4) if b1 & 0x80 else b"\0\0\0\0"
+                payload = bytes(c ^ mask[i % 4] for i, c in enumerate(read(n)))
+                op = b0 & 0x0F
+                if op == 8:  # close
+                    break
+                if op == 9:  # ping -> pong
+                    client.sendall(bytes([0x8A, len(payload)]) + payload)
+                elif op in (0, 2):
+                    vnc.sendall(payload)
+        except (OSError, ValueError):
+            pass
+        vnc.close()
+
+
+def main():
+    os.chdir(os.environ["MECHUMU_OUT"])
+    hub = Hub()
+    usbip = socket.create_server(("127.0.0.1", USBIP_PORT))
+    if os.path.exists("hub.sock"):
+        os.unlink("hub.sock")
+    control = socket.socket(socket.AF_UNIX)
+    control.bind("hub.sock")
+    control.listen()
+    for target, sock in ((hub.serve_usbip, usbip), (hub.serve_control, control)):
+        threading.Thread(target=target, args=(sock,), daemon=True).start()
+    Frame.hub = hub
+    frame = http.server.ThreadingHTTPServer(("127.0.0.1", FRAME_PORT), Frame)
+    threading.Thread(target=frame.serve_forever, daemon=True).start()
+    # `mechumu run` execs QEMU in our parent's process; when QEMU exits we're reparented: stop too.
+    parent = os.getppid()
+    while os.getppid() == parent:
+        time.sleep(1)
+    os.unlink("hub.sock")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except OSError as e:
+        sys.exit(f"mechumu: extension connector not started ({e}); is another Virtual Comet running?")

@@ -1,0 +1,18 @@
+# Extensions mechanix's extension service recognises by their input device's unique ID (a USB
+# device's serial number), and the key whose press/release it reports as connect/disconnect.
+# These are mechumu's built-in models (extensions/*.py); add your own model's serial here.
+
+[[extensions]]
+unique_id = "mechumu-keyboard"
+name = "Comet Keyboard"
+connection_key = "KEY_A"
+
+[[extensions]]
+unique_id = "mechumu-gamepad"
+name = "Comet Gamepad"
+connection_key = "BTN_SOUTH"
+
+[[extensions]]
+unique_id = "macro-pad-0001"
+name = "Macro Pad (extensions/example.py)"
+connection_key = "KEY_F14"

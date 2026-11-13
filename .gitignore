@@ -3,3 +3,4 @@ out/
 # Optional build credentials (see README); never commit
 mechumu.env
 __pycache__/
+.DS_Store

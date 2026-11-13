@@ -1,0 +1,14 @@
+[Unit]
+Description=Virtual Comet app-only mode (mechumu run --app ...)
+# Set by `mechumu run --app` as an SMBIOS credential; without it the full session starts.
+ConditionCredential=mechanix.app
+Before=greetd.service
+
+[Service]
+Type=oneshot
+LoadCredential=mechanix.app
+# mechanix-session runs as mecha and can't read credentials, so publish the command.
+ExecStart=/usr/bin/install -m 0644 ${CREDENTIALS_DIRECTORY}/mechanix.app /run/mechanix-app
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+enable comet-sim-upower.service
+enable comet-sim-ppd.service
+enable comet-simd.service
+enable comet-app.service
+enable mechanix-extension-service.service

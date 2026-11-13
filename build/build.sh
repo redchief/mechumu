@@ -3,8 +3,8 @@
 # Runs as root on Fedora 44 arm64: `mechumu build` runs it in a container, CI runs it directly.
 #
 # Every upstream source is pinned below and patches/<name>/*.patch are applied on top. Then the
-# patched compositor and keyboard are compiled into mecha-make's virt overlay, and mkosi builds
-# the image from mecha-make's `virt` profile.
+# patched compositor, keyboard and extension service are compiled into mecha-make's virt overlay
+# along with mechumu's guest/ tree, and mkosi builds the image from mecha-make's `virt` profile.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -16,7 +16,8 @@ SRC=$CACHE/src
 PINS=" mecha-make         https://github.com/mecha-org/mecha-make.git         b226b4291dd8708a6bad5fdc197b42c9150708fd
        mechanix-comp      https://github.com/mecha-org/mechanix-comp.git      c0d551b14775afa0a71e48fada4f51cb06e9768f
        mecha-wayland      https://github.com/mecha-org/mecha-wayland.git      f43c416148a1c4cfc290bf3056e7c73a43abb326
-       mechanix-keyboard  https://github.com/mecha-org/mechanix-keyboard.git  d8955720fbe3743d3f552b4159a618d4002a756a"
+       mechanix-keyboard  https://github.com/mecha-org/mechanix-keyboard.git  d8955720fbe3743d3f552b4159a618d4002a756a
+       mechanix-gui       https://github.com/mecha-org/mechanix-gui.git       f365790458d8bdea310ded1c0f1d90b2990244b7"
 
 [[ $(uname -m) == aarch64 ]] || { echo "build.sh: needs an arm64 host; the image and its binaries are aarch64" >&2; exit 1; }
 [[ $EUID == 0 ]] || { echo "build.sh: needs root (mkosi, loop devices)" >&2; exit 1; }
@@ -42,15 +43,32 @@ while read -r name url rev; do
     fetch "$name" "$url" "$rev"
 done <<<"$PINS"
 
-echo "==> Patched compositor and keyboard"
+echo "==> Patched compositor, keyboard and extension service"
 export CARGO_HOME=$CACHE/cargo
 OVERLAY=$SRC/mecha-make/mkosi.extra.virt/usr/bin
 cargo build --release --locked --manifest-path "$SRC/mechanix-comp/Cargo.toml" --target-dir "$CACHE/target/mechanix-comp"
 # Not --locked: the patch points the renderer at the sibling mecha-wayland checkout, which rewrites its lock entry.
 # RUSTC_BOOTSTRAP: mecha-wayland's workspace manifest enables a nightly cargo feature; no nightly code is used.
 RUSTC_BOOTSTRAP=1 cargo build --release --manifest-path "$SRC/mechanix-keyboard/Cargo.toml" --target-dir "$CACHE/target/mechanix-keyboard"
+# mechanix-gui's workspace fetches every member's git dependencies (Flutter among them) to build any
+# one crate, so the extension service's two crates get a workspace of their own, on upstream's lockfile.
+GUI=$SRC/mechanix-gui EXT=$SRC/mechanix-extensions
+rm -rf "$EXT" && mkdir -p "$EXT/services" "$EXT/dbus/mechanix"
+cp -R "$GUI/services/extensions" "$EXT/services/"
+cp -R "$GUI/dbus/mechanix/extensions" "$EXT/dbus/mechanix/"
+cp "$GUI/Cargo.lock" "$EXT/"
+{
+    printf '[workspace]\nresolver = "3"\nmembers = ["services/extensions", "dbus/mechanix/extensions"]\n\n'
+    awk '/^\[workspace.package\]/ {p=1} /^\[workspace.dependencies\]/ {p=0} p' "$GUI/Cargo.toml"
+    printf '[workspace.dependencies]\n'
+    grep -E '^(tokio|log|anyhow|env_logger) =' "$GUI/Cargo.toml"
+} > "$EXT/Cargo.toml"
+cargo build --release -p mechanix-extension-service --manifest-path "$EXT/Cargo.toml" --target-dir "$CACHE/target/mechanix-gui"
 install -D -m 0755 "$CACHE/target/mechanix-comp/release/compositor" "$OVERLAY/mechanix-compositor"
 install -D -m 0755 "$CACHE/target/mechanix-keyboard/release/mechanix-keyboard" "$OVERLAY/mechanix-keyboard"
+install -D -m 0755 "$CACHE/target/mechanix-gui/release/mechanix-extension-service" "$OVERLAY/mechanix-extension-service"
+# mechumu's own guest side: simulated hardware, extension connector, app-only mode (see guest/).
+cp -R "$HERE/guest/." "$SRC/mecha-make/mkosi.extra.virt/"
 
 echo "==> Image"
 cd "$SRC/mecha-make"

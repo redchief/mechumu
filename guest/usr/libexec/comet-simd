@@ -1,0 +1,272 @@
+#!/usr/bin/python3
+"""Virtual Comet hardware: GPIO header (gpio-sim), CAN (vcan), battery (mock UPower), hardware
+buttons (uinput) and the extension connector (USB/IP from the host's `mechumu` hub).
+
+Sets the devices up, then applies one-line commands from the host's control
+port (virtio-serial org.mecha.comet.ctl, held by the host's hub: `mechumu ctl` / `mechumu ext`) and
+answers each with one line: "ok ..." or "error ...", prefixed with the command's "#<id>" if it had one.
+"""
+import fcntl, glob, os, socket, struct, subprocess, sys, threading, time
+import dbus
+
+PORT = "/dev/virtio-ports/org.mecha.comet.ctl"
+SIM = "/sys/kernel/config/gpio-sim/comet"
+GPIO_LINES = 16
+UPOWER = "org.freedesktop.UPower"
+DISPLAY_DEV = "/org/freedesktop/UPower/devices/DisplayDevice"
+# UPower Device.State values
+STATES = {"charging": 1, "discharging": 2, "full": 4}
+
+
+def sh(*cmd):
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def setup_gpio():
+    if not os.path.isdir(SIM):
+        sh("modprobe", "gpio-sim")
+        os.makedirs(f"{SIM}/bank0")
+        open(f"{SIM}/bank0/label", "w").write("comet-ext-gpio")
+        open(f"{SIM}/bank0/num_lines", "w").write(str(GPIO_LINES))
+        for n in range(GPIO_LINES):
+            os.makedirs(f"{SIM}/bank0/line{n}")
+            open(f"{SIM}/bank0/line{n}/name", "w").write(f"EXT_GPIO{n}")
+        open(f"{SIM}/live", "w").write("1")
+
+
+def gpio_dir():
+    dev = open(f"{SIM}/dev_name").read().strip()
+    chip = open(f"{SIM}/bank0/chip_name").read().strip()
+    return f"/sys/devices/platform/{dev}/{chip}"
+
+
+def setup_can():
+    if not os.path.exists("/sys/class/net/can0"):
+        sh("modprobe", "vcan")
+        sh("ip", "link", "add", "dev", "can0", "type", "vcan")
+    sh("ip", "link", "set", "up", "can0")
+
+
+# --- hardware buttons ---------------------------------------------------------------------------
+# One input device per button, as the Comet's gpio-keys give mechanix-system-service (it opens one
+# path per button; its drop-in points them at the /dev/input/comet-* links our udev rule makes).
+EV_SYN, EV_KEY = 0, 1
+BUTTONS = {  # name: (device name, key code)
+    "power": ("Comet Power Button", 116),       # KEY_POWER
+    "home": ("Comet Home Button", 102),         # KEY_HOME
+    "volup": ("Comet Volume Up", 115),          # KEY_VOLUMEUP
+    "voldown": ("Comet Volume Down", 114),      # KEY_VOLUMEDOWN
+    "extension": ("Comet Extension Detect", 194),  # KEY_F24: mechanix's "extension detection" key
+}
+buttons = {}
+
+
+def setup_buttons():
+    sh("modprobe", "uinput")
+    for key, (name, code) in BUTTONS.items():
+        fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+        fcntl.ioctl(fd, 0x40045564, EV_KEY)   # UI_SET_EVBIT
+        fcntl.ioctl(fd, 0x40045565, code)     # UI_SET_KEYBIT
+        # struct uinput_setup: input_id (BUS_HOST 0x19, vendor, product, version), name[80], ff_effects_max
+        fcntl.ioctl(fd, 0x405C5503, struct.pack("<HHHH80sI", 0x19, 0, 0, 1, name.encode(), 0))  # UI_DEV_SETUP
+        fcntl.ioctl(fd, 0x5501)               # UI_DEV_CREATE
+        buttons[key] = (fd, code)
+
+
+def key_event(button, value):
+    fd, code = buttons[button]
+    os.write(fd, struct.pack("<qqHHi", 0, 0, EV_KEY, code, value) + struct.pack("<qqHHi", 0, 0, EV_SYN, 0, 0))
+
+
+# --- extension connector -----------------------------------------------------------------------
+# The host's hub serves the connector's USB devices over USB/IP at 10.0.2.2:3240 (QEMU user
+# networking's address for the host): bus ID 1-1 is the attached extension, 1-2 the connector's
+# I2C pins (an i2c-tiny-usb adapter, linked as /dev/i2c-comet-ext by our udev rule).
+VHCI = "/sys/devices/platform/vhci_hcd.0"
+HUB = ("10.0.2.2", 3240)
+ports = {}  # bus ID -> vhci port
+vhci_lock = threading.Lock()  # the I2C keep-alive thread and host commands both pick free ports
+
+
+def recv_exact(sock, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("hub closed the connection")
+        buf += chunk
+    return buf
+
+
+def port_state(port):
+    """vhci port state: 4 free, 6 in use (status columns: hub port sta spd dev sockfd local_busid)."""
+    for line in open(f"{VHCI}/status").read().splitlines()[1:]:
+        f = line.split()
+        if f[0] == "hs" and int(f[1]) == port:
+            return int(f[2])
+    return None
+
+
+def usb_devices():
+    return {d for d in glob.glob(f"{VHCI}/usb*/*-*") if os.path.exists(f"{d}/product")}
+
+
+def usbip_attach(busid):
+    before = usb_devices()
+    with vhci_lock, socket.create_connection(HUB, timeout=5) as sock:
+        sock.sendall(struct.pack(">HHI32s", 0x0111, 0x8003, 0, busid.encode()))  # OP_REQ_IMPORT
+        _, _, status = struct.unpack(">HHI", recv_exact(sock, 8))
+        if status:
+            raise RuntimeError(f"hub has no device {busid}")
+        busnum, devnum, speed = struct.unpack(">III", recv_exact(sock, 312)[288:300])
+        port = next(int(f[1]) for f in (l.split() for l in open(f"{VHCI}/status").read().splitlines()[1:])
+                    if f[0] == "hs" and f[2] == "004")
+        with open(f"{VHCI}/attach", "w") as a:  # the kernel takes over the socket
+            a.write(f"{port} {sock.fileno()} {busnum << 16 | devnum} {speed}")
+    ports[busid] = port
+    for _ in range(50):  # attached means enumerated: drivers bound, as after plugging in by hand
+        if usb_devices() - before:
+            return
+        time.sleep(0.1)
+    raise RuntimeError(f"{busid} attached but never enumerated; see dmesg")
+
+
+def usbip_detach(busid):
+    with vhci_lock:
+        port = ports.pop(busid, None)
+        if port is not None and port_state(port) != 4:
+            before = usb_devices()
+            with open(f"{VHCI}/detach", "w") as d:
+                d.write(str(port))
+            for _ in range(50):  # detached means gone, so a replacement on this port is seen as new
+                if len(usb_devices()) < len(before):
+                    break
+                time.sleep(0.1)
+
+
+def setup_connector():
+    sh("modprobe", "vhci-hcd")
+    threading.Thread(target=keep_i2c_attached, daemon=True).start()
+
+
+def keep_i2c_attached():
+    """The connector's I2C pins are always there; reattach whenever the hub (re)starts."""
+    while True:
+        port = ports.get("1-2")
+        if port is None or port_state(port) == 4:
+            try:
+                usbip_attach("1-2")
+            except (OSError, RuntimeError, StopIteration):
+                pass
+        time.sleep(3)
+
+
+def mock():
+    return dbus.Interface(dbus.SystemBus().get_object(UPOWER, "/org/freedesktop/UPower"),
+                          "org.freedesktop.DBus.Mock")
+
+
+def set_battery(percent, state):
+    # Comet DTS: energy-full-design 5.29 Wh, max charge 0.9 A @ 4.2 V (~3.8 W).
+    # shortcut: the 2 W discharge rate is a guess, not a measured Comet figure; replace once one is known.
+    full, draw, charge = 5.29, 2.0, 3.8
+    energy = full * percent / 100
+    mock().SetDeviceProperties(DISPLAY_DEV, {
+        "Type": dbus.UInt32(2), "IsPresent": True, "State": dbus.UInt32(STATES[state]),
+        "Percentage": dbus.Double(percent), "Energy": dbus.Double(energy), "EnergyFull": dbus.Double(full),
+        "TimeToEmpty": dbus.Int64(int(energy / draw * 3600) if state == "discharging" else 0),
+        "TimeToFull": dbus.Int64(int((full - energy) / charge * 3600) if state == "charging" else 0),
+        "IconName": f"battery-level-{int(percent) // 10 * 10}{'-charging' if state == 'charging' else ''}-symbolic",
+        "WarningLevel": dbus.UInt32(3 if percent <= 5 else 2 if percent <= 15 else 1),
+    })
+    mock().EmitSignal("org.freedesktop.UPower", "DeviceChanged", "o", [DISPLAY_DEV])
+
+
+def handle(line):
+    cmd, *args = line.split()
+    if cmd == "battery":
+        percent = float(args[0])
+        state = args[1] if len(args) > 1 else ("full" if percent >= 100 else "discharging")
+        if not 0 <= percent <= 100 or state not in STATES:
+            raise ValueError("usage: battery <0-100> [charging|discharging|full]")
+        set_battery(percent, state)
+        return f"battery {percent:g}% {state}"
+    if cmd == "gpio" and not args:
+        d = gpio_dir()
+        return " ".join(f"{n}={open(f'{d}/sim_gpio{n}/value').read().strip()}" for n in range(GPIO_LINES))
+    if cmd == "gpio" and len(args) == 2 and args[1] in ("0", "1"):
+        n = int(args[0])
+        if not 0 <= n < GPIO_LINES:
+            raise ValueError(f"line must be 0-{GPIO_LINES - 1}")
+        # The pull is what an external signal on an input pin looks like to gpiod readers.
+        open(f"{gpio_dir()}/sim_gpio{n}/pull", "w").write("pull-up" if args[1] == "1" else "pull-down")
+        return f"EXT_GPIO{n} driven {args[1]}"
+    if cmd == "can" and len(args) == 1:
+        sh("cansend", "can0", args[0])  # e.g. 123#DEADBEEF, as if sent by an extension
+        return f"can0 <- {args[0]}"
+    if cmd == "usb" and not args:  # what's on the connector's USB pins, as the guest sees it
+        names = [open(f"{d}/product").read().strip() for d in sorted(usb_devices())]
+        return ", ".join(names) or "no USB devices"
+    if cmd == "button" and len(args) == 1 and args[0] in BUTTONS and args[0] != "extension":
+        key_event(args[0], 1)
+        time.sleep(0.1)
+        key_event(args[0], 0)
+        return f"{args[0]} pressed"
+    if cmd == "ext" and len(args) == 2 and args[0] in ("attach", "detach"):
+        if args[0] == "attach":  # replaces whatever is attached, like swapping extensions by hand
+            if args[1] in ports:
+                usbip_detach(args[1])
+                key_event("extension", 0)
+            usbip_attach(args[1])
+            key_event("extension", 1)
+        else:
+            usbip_detach(args[1])
+            key_event("extension", 0)
+        return f"{args[1]} {args[0]}ed"
+    raise ValueError("commands: battery <pct> [state] | gpio [<line> <0|1>] | can <id>#<hex>"
+                     " | button power|home|volup|voldown | usb")
+
+
+def main():
+    setup_gpio()
+    setup_can()
+    setup_buttons()
+    setup_connector()
+    for _ in range(50):  # UPower mock starts alongside us
+        try:
+            set_battery(80, "discharging")
+            break
+        except dbus.DBusException:
+            time.sleep(0.2)
+    print(f"comet-simd: gpio {glob.glob('/dev/gpiochip*')}, can0, battery, buttons, connector ready", flush=True)
+    if os.environ.get("NOTIFY_SOCKET"):  # Type=notify: the button devices exist now
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as n:
+            n.sendto(b"READY=1", os.environ["NOTIFY_SOCKET"].replace("@", "\0", 1))
+    while True:
+        served = False
+        try:
+            with open(PORT, "r+b", buffering=0) as port:
+                for raw in port:
+                    served = True
+                    line = raw.decode(errors="replace").strip()
+                    if not line:
+                        continue
+                    tag = ""
+                    if line.startswith("#"):  # the hub's request ID; echoed so it can match replies
+                        tag, _, line = line.partition(" ")
+                        tag += " "
+                    try:
+                        reply = tag + "ok " + handle(line)
+                    except Exception as e:  # report every failure to the host, keep serving
+                        reply = f"{tag}error {e}"
+                    print(f"comet-simd: {line} -> {reply}", flush=True)
+                    port.write(reply.encode() + b"\n")
+        except OSError as e:
+            print(f"comet-simd: control port: {e}", file=sys.stderr, flush=True)
+        if not served:  # EOF with no command: host side not connected yet
+            time.sleep(0.5)
+        # else reopen at once: the host's next command may already be waiting
+
+
+if __name__ == "__main__":
+    main()

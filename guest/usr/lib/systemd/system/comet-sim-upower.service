@@ -1,0 +1,10 @@
+[Unit]
+Description=Virtual Comet: mock UPower (battery driven by comet-simd)
+
+[Service]
+Type=dbus
+BusName=org.freedesktop.UPower
+ExecStart=/usr/bin/python3 -m dbusmock --system --template upower
+
+[Install]
+WantedBy=multi-user.target

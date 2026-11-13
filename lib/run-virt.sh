@@ -1,19 +1,22 @@
 #!/bin/bash
-# mechumu run [--app <desktop id|command>] [--headless] [-- <qemu args>]
+# mechumu run [--app <desktop id|command>] [--frame | --headless] [-- <qemu args>]
 # Boots $MECHUMU_OUT/mechanix-os-virt.qcow2 on QEMU's arm64 `virt` machine: the screen in a
-# window, the serial console in this terminal (quit with Ctrl-A then X). Changes persist in the image.
+# window (or, with --frame, in a browser page drawn as the device, buttons and extensions included),
+# the serial console in this terminal (quit with Ctrl-A then X). Changes persist in the image.
 set -euo pipefail
 
-APP= HEADLESS=
+APP= HEADLESS= FRAME=
 while (($#)); do
     case $1 in
         --app) APP=${2:?--app needs a desktop id or command}; shift 2 ;;
         --headless) HEADLESS=1; shift ;;
+        --frame) FRAME=1; shift ;;
         --) shift; break ;;
         *) break ;;
     esac
 done
 
+LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "${MECHUMU_OUT:?}"
 IMAGE=mechanix-os-virt.qcow2
 [[ -f $IMAGE ]] || { echo "no $PWD/$IMAGE - run 'mechumu build'" >&2; exit 1; }
@@ -46,6 +49,9 @@ esac
 # shortcut: macOS cocoa sends mouse, not touch, events; touch only works through the gtk UI on Linux.
 if [[ -n $HEADLESS ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none)
+elif [[ -n $FRAME ]]; then
+    # VNC on a Unix socket only; the hub relays it to the frame page (lib/frame.html).
+    GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none -vnc unix:vnc.sock)
 elif [[ "$(uname -s)" == Darwin ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display cocoa,zoom-to-fit=on)
 else
@@ -63,6 +69,14 @@ for key in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do
     CREDS+=(-smbios "type=11,value=io.systemd.credential:ssh.authorized_keys.root=${k//,/,,}")
     break
 done
+
+# The extension connector (`mechumu ext`); it exits when QEMU, which takes over this process, does.
+python3 "$LIB/hub.py" >hub.log 2>&1 &
+if [[ -n $FRAME ]]; then
+    url=http://127.0.0.1:8090/
+    echo "mechumu: the device frame is at $url"
+    (sleep 2; open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || true) &
+fi
 
 exec qemu-system-aarch64 \
     -machine virt \
