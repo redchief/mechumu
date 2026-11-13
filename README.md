@@ -27,19 +27,19 @@ You need QEMU 10.0 or later (older versions run `mechumu run` but lack the EVK m
 `sudo dnf install qemu-system-aarch64 qemu-img` on Fedora, or
 `sudo apt install qemu-system-arm qemu-utils` on Debian/Ubuntu.
 
-Download `mechumu-arm64.tar` from the
-[latest release](../../releases/latest), then:
+There are no prebuilt images yet, so build one first (an arm64 host with Docker;
+see [Building from source](#building-from-source)), then run it:
 
 ```sh
-tar -xf mechumu-arm64.tar
+git clone https://github.com/redchief/mechumu.git && cd mechumu
+./mechumu build
 ./mechumu run
 ```
 
 The Comet's screen opens in a window and the serial console runs in your
 terminal. The UI is up about 20 seconds after launch on an M-series Mac. To quit,
 press Ctrl-A then X in the terminal. Anything you change inside the Virtual
-Comet is kept in `out/mechanix-os-virt.qcow2`; unpack the release again for a
-clean device.
+Comet is kept in `out/mechanix-os-virt.qcow2`; rebuild for a clean device.
 
 ## Using it
 
