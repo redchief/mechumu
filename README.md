@@ -52,8 +52,8 @@ key (`~/.ssh/id_ed25519.pub`, `id_ecdsa.pub` or `id_rsa.pub`) to the guest, so:
 ssh -p 2222 root@localhost
 ```
 
-Port 2222 listens on localhost only. Released images ship the `mecha` user's
-password locked; images you build yourself can set one (see
+Port 2222 listens on localhost only. The `mecha` user's password is locked
+unless you set one in `mechumu.env` before building (see
 [Building from source](#building-from-source)).
 
 ### Simulated hardware

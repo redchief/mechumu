@@ -16,7 +16,7 @@ done
 
 cd "${MECHUMU_OUT:?}"
 IMAGE=mechanix-os-virt.qcow2
-[[ -f $IMAGE ]] || { echo "no $PWD/$IMAGE - run 'mechumu build' or unpack a release here" >&2; exit 1; }
+[[ -f $IMAGE ]] || { echo "no $PWD/$IMAGE - run 'mechumu build'" >&2; exit 1; }
 
 # UEFI firmware: Homebrew qemu ships edk2-aarch64-code.fd, Fedora/Debian ship AAVMF/QEMU_EFI.
 QEMU_SHARE=$(dirname "$(command -v qemu-system-aarch64 || echo /usr/bin/x)")/../share/qemu
@@ -54,7 +54,7 @@ fi
 
 # Settings for the guest travel as systemd credentials in SMBIOS OEM strings; QEMU option values
 # double their commas. --app is read by comet-app.service; your SSH public key lets you in as root
-# (ssh -p 2222 root@localhost), since released images ship the mecha account locked.
+# (ssh -p 2222 root@localhost), since images built without a password ship the mecha account locked.
 CREDS=()  # expanded with a guard below: macOS bash 3.2 treats an empty array as unset under set -u
 [[ -n $APP ]] && CREDS+=(-smbios "type=11,value=io.systemd.credential:mechanix.app=${APP//,/,,}")
 for key in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do

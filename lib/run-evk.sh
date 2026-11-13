@@ -8,7 +8,7 @@ set -euo pipefail
 
 cd "${MECHUMU_OUT:?}"
 IMAGE=mechanix-os-virt.qcow2
-[[ -f $IMAGE && -f evk-boot/vmlinuz ]] || { echo "no $PWD/$IMAGE and evk-boot/ - run 'mechumu build' or unpack a release here" >&2; exit 1; }
+[[ -f $IMAGE && -f evk-boot/vmlinuz ]] || { echo "no $PWD/$IMAGE and evk-boot/ - run 'mechumu build'" >&2; exit 1; }
 
 # QEMU's SD card must be a power of two in size; a throwaway overlay, recreated each run, gives it 8G
 # and keeps the image untouched.
