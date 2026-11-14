@@ -72,6 +72,8 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 ./mechumu ctl spi a5ff                 # send 2 bytes on connector SPI; prints what came back
 ./mechumu ctl pwm 3 1000 25            # set connector pin PWM3 to 1 kHz, 25% duty, as a guest app would
 ./mechumu ctl pwm                      # PWM3-4 as the Comet last set them
+./mechumu ctl i2s play                 # play a tone on connector I2S, as a guest app would (or: record)
+./mechumu ctl i2s                      # how much the Comet has played on I2S, and how loud
 ./mechumu ctl can 123#DEADBEEF         # inject a CAN frame on can0
 ./mechumu ctl button home              # press a button: power, home, volup, voldown
 ./mechumu ctl light 500                # ambient light in lux
@@ -86,6 +88,7 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Connector ADC1–4 | An IIO ADC, 10 bits over 3.3 V | `/sys/bus/iio/devices/iio:device0/in_voltage<0-3>_raw` |
 | Connector I2C | `/dev/i2c-comet-ext` | `i2c-dev`, kernel drivers via `new_device` |
 | Connector PWM3, PWM4 | Two one-channel pwmchips, as on a Comet (`ls /sys/bus/usb/drivers/comet-pwm/*/pwm`: PWM3 first) | The PWM sysfs interface (`export`, `period`, `duty_cycle`, `enable`) |
+| Connector I2S (SAI2) | A `Comet SAI2` sound card (48 kHz, 16-bit stereo, playback and capture) while the attached extension has I2S, as an extension's overlay would add one; PipeWire lists it below the Comet's own speaker and mic, which stay the defaults | Any ALSA or PipeWire app |
 | Connector SPI | `/dev/spidev-comet-ext` (one chip select, 8-bit words) | Any spidev program (user `mecha` is in group `gpio`) |
 | Connector UART1, UART2 | `/dev/comet-uart1`, `/dev/comet-uart2` (16550s) | Any serial program |
 | CAN bus | Virtual CAN interface `can0` | `candump can0`, SocketCAN |
@@ -140,8 +143,8 @@ Attaching or removing an extension also does what it does on a device:
 An extension model is a Python file. [`extensions/example.py`](extensions/example.py)
 is a commented template: a macro pad (a USB HID keyboard with four keys) with a
 TMP102 temperature sensor on the connector's I2C bus, an LED on GPIO1, a knob on
-ADC1, a console on UART1, an LED bar on SPI (a 74HC595 shift register) and a
-backlight dimmed by PWM3. Copy it, then:
+ADC1, a console on UART1, an LED bar on SPI (a 74HC595 shift register), a
+backlight dimmed by PWM3, and a speaker amplifier and mic on I2S. Copy it, then:
 
 ```sh
 ./mechumu ext attach my_extension.py   # attach it again after each edit to reload it
@@ -157,7 +160,7 @@ cat /sys/class/hwmon/hwmon*/temp1_input
 
 A model describes its USB device (IDs, strings, interfaces and endpoints, or just
 a HID report descriptor), answers the connector's I2C and SPI transfers (`i2c_write`,
-`i2c_read`, `spi_transfer`, `spi_deselect`), and hears and drives its other pins (`on_gpio` / `set_gpio`, `on_pwm`, `adc`,
+`i2c_read`, `spi_transfer`, `spi_deselect`), and hears and drives its other pins (`on_gpio` / `set_gpio`, `on_pwm`, `adc`, `on_i2s` / `i2s_capture` with `i2s = True`,
 `on_uart` / `uart_send`); the guest's own drivers do the rest. [`lib/connector.py`](lib/connector.py) has the base
 classes. Errors in a model land in `out/hub.log`.
 
@@ -247,7 +250,10 @@ mainline drivers turn into an I2C bus, an SPI controller, a gpiochip and an IIO
 ADC; the hub passes each transfer to the attached model. Linux only creates SPI
 devices from firmware, so the comet-board module (below) adds one for spidev. No
 DLN-2 has PWM, so the adapter has a second interface of mechumu's own for PWM3
-and PWM4, and comet-board's USB driver turns it into two pwmchips. UART1 and UART2 are QEMU PCI serial ports
+and PWM4, and comet-board's USB driver turns it into two pwmchips. While the
+attached extension has I2S, the server also offers a USB audio device for the
+SAI2 pins, which the guest's `snd-usb-audio` makes a sound card; the server
+completes its isochronous transfers in real time, so audio plays at its true rate. UART1 and UART2 are QEMU PCI serial ports
 whose other ends the hub holds.
 
 The Comet's onboard sensors sit on its internal I2C3 bus. The same server
@@ -268,7 +274,7 @@ The `virt` profile differs from the device image in a few places:
 
 - **IMU buffering:** the IMU's data-ready interrupt never fires, so raw reads and polling work but FIFO-buffered capture doesn't; iio-sensor-proxy is set to poll it.
 - **Sensor axes:** chosen so iio-sensor-proxy reports the right orientation; the Comet's actual mounting (its mount matrix) isn't published.
-- **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S (the SAI2 pins) isn't simulated.
+- **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM, I2S and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S runs at one format, 48 kHz 16-bit stereo, and the sound card is a USB audio device rather than an SAI-and-codec card, so ALSA names it `Comet SAI2` instead of after the extension's codec.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
 - **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. Through VNC the screen gets mouse events, not multi-touch.

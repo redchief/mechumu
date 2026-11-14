@@ -47,7 +47,7 @@ expect "ok gamepad attached" ext attach gamepad
 expect "Comet Gamepad" ctl usb
 expect "ok a pressed" ext press a
 # The from-scratch example: its LED bar on the connector's SPI pins (the guest's spidev) and its
-# backlight on PWM3 (the guest's pwmchip).
+# backlight on PWM3 (the guest's pwmchip), and its speaker and mic on I2S (the guest's sound card).
 expect "ok macro-pad attached" ext attach extensions/example.py
 expect "ok spi a5 -> 00" ctl spi a5
 expect "ok spi 3c81 -> a53c" ctl spi 3c81
@@ -55,8 +55,15 @@ expect "LED bar #......#" ext bar
 expect "ok PWM3 1000 Hz, 25% duty" ctl pwm 3 1000 25
 expect "backlight 25%" ext backlight
 expect "ok PWM3=1000Hz@25% PWM4=off" ctl pwm
+expect "Comet SAI2" ctl sound
+expect "ok played 0.5 s" ctl i2s play
+expect "peak 50%" ext speaker
+expect "ok I2S played" ctl i2s
+expect "ok mic tone at 50%" ext mic 50
+expect "peak 50%" ctl i2s record
 expect "ok io-breakout attached" ext attach io-breakout
 expect "CP2102" ctl usb
+expect "ok no I2S extension attached" ctl i2s
 expect "ok io-breakout detached" ext detach
 expect "error nothing attached" ext press a
 echo PASS

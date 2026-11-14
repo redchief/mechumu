@@ -28,13 +28,15 @@ class Hub:
     def __init__(self):
         self.ext, self.name = None, None
         self.bridge = connector.Bridge(lambda: self.ext)
+        self.i2s = connector.I2s(lambda: self.ext)
         self.sensors = sensors.SensorBus()
         self.uarts = {1: None, 2: None}
         self.lock = threading.Lock()
         self.port, self.port_lock, self.seq = None, threading.Lock(), 0
 
     def lookup(self, busid):
-        return {"1-1": self.ext, "1-2": self.bridge, "1-3": self.sensors}.get(busid)
+        i2s = self.i2s if self.ext and self.ext.i2s else None  # its sound card only with an I2S extension
+        return {"1-1": self.ext, "1-2": self.bridge, "1-3": self.sensors, "1-4": i2s}.get(busid)
 
     def load(self, spec):
         path = spec if spec.endswith(".py") else os.path.join(EXTENSIONS, f"{spec}.py")
@@ -96,12 +98,20 @@ class Hub:
                 return "error volts must be 0-3.3"
             b.adc_volts[int(args[0]) - 1] = v
             return f"ok ADC{args[0]} at {v:g} V"
+        if cmd == "i2s" and args:  # playing or recording: the guest does that, through its sound card
+            return self.guest_raw("i2s " + " ".join(args))
+        if cmd == "i2s":
+            if not (self.ext and self.ext.i2s):
+                return "ok no I2S extension attached"
+            played, peak = self.i2s.played / self.i2s.RATE, self.i2s.peak / 32768
+            self.i2s.peak = 0
+            return f"ok I2S played {played:.2f} s, peak {peak:.0%}"
         if cmd == "pwm" and args:  # setting one: the guest does that, through its own pwmchip
             return self.guest_raw("pwm " + " ".join(args))
         if cmd == "pwm":
             return "ok " + " ".join(f"PWM{n}=" + (f"{1e9 / p:g}Hz@{d / p:.0%}" if e and p else "off")
                                     for n, (p, d, e) in b.pwm.items())
-        return f"error usage: gpio [<1-{b.GPIO_PINS}> <0|1>] | adc <1-{b.ADC_CHANNELS}> <volts> | pwm"
+        return f"error usage: gpio [<1-{b.GPIO_PINS}> <0|1>] | adc <1-{b.ADC_CHANNELS}> <volts> | pwm | i2s"
 
     # --- UART1/UART2: QEMU's PCI serial ports, guest side /dev/comet-uart1|2 ----------------------
     def serve_uart(self, n):
@@ -144,6 +154,10 @@ class Hub:
                 self.ext, self.name = ext, name  # the guest's attach swaps out any previous one
                 try:
                     self.guest("ext attach 1-1")
+                    self.guest("bus detach 1-4")  # the previous extension's I2S sound card, if any
+                    self.i2s.played = self.i2s.peak = 0
+                    if ext.i2s:
+                        self.guest("bus attach 1-4")
                 except Exception:
                     self.unplug()
                     raise
@@ -154,6 +168,7 @@ class Hub:
                 name = self.name
                 self.unplug()
                 self.guest("ext detach 1-1")
+                self.guest("bus detach 1-4")
                 return f"{name} detached"
             if cmd == "status" and not args:
                 return f"{self.name} attached" if self.ext else "nothing attached"
@@ -187,7 +202,7 @@ class Hub:
         if line.startswith("ctl "):
             cmd, *args = line[4:].split() or [""]
             try:
-                if cmd in ("gpio", "adc", "pwm"):
+                if cmd in ("gpio", "adc", "pwm", "i2s"):
                     return self.pins(cmd, args)
                 if cmd in ("light", "tilt", "accel", "gyro", "heading", "sensors"):
                     return self.sensors.ctl(cmd, args) or ("error usage: light <lux> | tilt <pitch> <roll> | "

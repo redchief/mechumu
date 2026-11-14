@@ -4,18 +4,21 @@ An extension model subclasses Device (or HidDevice) and describes itself with de
 guest's own kernel drivers (usbhid, cp210x, dln2, ...) bind to it exactly as they would to
 the real extension on the connector's USB pins. See extensions/example.py for a from-scratch model.
 """
-import queue, socket, struct, threading
+import heapq, queue, socket, struct, threading, time
 
 # --- descriptors ------------------------------------------------------------------------------
 
-def ep(addr, kind, size, interval=0):
-    """One endpoint: addr 0x81 = IN 1, 0x02 = OUT 2; kind 'bulk' | 'int'."""
-    return {"addr": addr, "kind": {"bulk": 2, "int": 3}[kind], "size": size, "interval": interval}
+def ep(addr, kind, size, interval=0, extra=b""):
+    """One endpoint: addr 0x81 = IN 1, 0x02 = OUT 2; kind 'bulk' | 'int' | 'iso-async' | 'iso-adaptive'.
+    extra follows it (e.g. an audio class endpoint descriptor)."""
+    kinds = {"bulk": 2, "int": 3, "iso-async": 0x05, "iso-adaptive": 0x09}
+    return {"addr": addr, "kind": kinds[kind], "size": size, "interval": interval, "extra": extra}
 
 
-def iface(cls, sub=0, proto=0, eps=(), extra=b""):
-    """One interface; extra goes between the interface and its endpoints (e.g. a HID descriptor)."""
-    return {"cls": cls, "sub": sub, "proto": proto, "eps": list(eps), "extra": extra}
+def iface(cls, sub=0, proto=0, eps=(), extra=b"", alt=0):
+    """One interface (or, with alt > 0, an alternate setting of the one before it); extra goes
+    between the interface and its endpoints (e.g. a HID descriptor)."""
+    return {"cls": cls, "sub": sub, "proto": proto, "eps": list(eps), "extra": extra, "alt": alt}
 
 
 class Device:
@@ -32,6 +35,13 @@ class Device:
 
     def out(self, ep, data):
         """Data the guest wrote to an OUT endpoint."""
+
+    def iso_out(self, ep, packets):
+        """Isochronous packets (bytes, one per 1 ms frame) the guest wrote to an OUT endpoint."""
+
+    def iso_in(self, ep, sizes):
+        """Isochronous packets for an IN endpoint, at most sizes[i] bytes each (one per 1 ms frame)."""
+        return [b""] * len(sizes)
 
     def command(self, args):
         """`mechumu ext <args>` while attached: drive the extension from the host. Returns a reply."""
@@ -63,6 +73,17 @@ class Device:
         """Send bytes to the Comet on UART<n>."""
         if self.connector:
             self.connector.uart_send(n, data)
+
+    # The connector's I2S pins (SAI2), if the extension sets i2s = True: the Comet then gets a sound
+    # card for them. Audio is 48 kHz, 16-bit little-endian stereo: 4 bytes per frame, left first.
+    i2s = False
+
+    def on_i2s(self, frames):
+        """Audio the Comet played on TXD."""
+
+    def i2s_capture(self, nbytes):
+        """Audio for the Comet to record on RXD: nbytes of frames, or None for silence."""
+        return None
 
     # The connector's SPI pins: the Comet is the controller, with one chip select.
     def spi_transfer(self, data):
@@ -117,13 +138,18 @@ class Device:
             return struct.pack("<BBHBBBBHHHBBBB", 18, 1, 0x0200, self.cls, self.sub, self.proto, 64,
                                self.vid, self.pid, self.bcd, 1, 2, 3 if self.serial else 0, 1)
         if kind == 2:
-            body = b""
-            for n, i in enumerate(self.interfaces):
-                body += struct.pack("<BBBBBBBBB", 9, 4, n, 0, len(i["eps"]), i["cls"], i["sub"], i["proto"], 0)
+            body, n = b"", -1
+            for i in self.interfaces:
+                n += not i.get("alt")
+                body += struct.pack("<BBBBBBBBB", 9, 4, n, i.get("alt", 0), len(i["eps"]), i["cls"], i["sub"], i["proto"], 0)
                 body += i["extra"]
                 for e in i["eps"]:
-                    body += struct.pack("<BBBBHB", 7, 5, e["addr"], e["kind"], e["size"], e["interval"])
-            return struct.pack("<BBHBBBBB", 9, 2, 9 + len(body), len(self.interfaces), 1, 0, 0x80, 50) + body
+                    if e["kind"] & 3 == 1:  # isochronous: audio class 1's 9-byte form (bRefresh, bSynchAddress)
+                        body += struct.pack("<BBBBHBBB", 9, 5, e["addr"], e["kind"], e["size"], e["interval"], 0, 0)
+                    else:
+                        body += struct.pack("<BBBBHB", 7, 5, e["addr"], e["kind"], e["size"], e["interval"])
+                    body += e.get("extra", b"")
+            return struct.pack("<BBHBBBBB", 9, 2, 9 + len(body), n + 1, 1, 0, 0x80, 50) + body
         if kind == 3:
             if index == 0:
                 return b"\x04\x03\x09\x04"  # en-US
@@ -320,6 +346,69 @@ class Bridge(Device):
         return self.FAIL, b""
 
 
+def _audio_stream(terminal, ep_addr, sync, rate, packet):
+    """A USB audio class 1 streaming interface for 16-bit stereo PCM: alt 0 idle, alt 1 streaming."""
+    general = struct.pack("<BBBBBH", 7, 0x24, 1, terminal, 1, 0x0001)                        # AS_GENERAL: PCM
+    fmt = struct.pack("<BBBBBBBB", 11, 0x24, 2, 1, 2, 2, 16, 1) + rate.to_bytes(3, "little")  # type I, one rate
+    cs_ep = struct.pack("<BBBBBH", 7, 0x25, 1, 0x01, 0, 0)                                   # sampling-frequency control
+    return [iface(1, 2), iface(1, 2, alt=1, extra=general + fmt,
+                               eps=[ep(ep_addr, sync, packet + 8, interval=1, extra=cs_ep)])]
+
+
+class I2s(Device):
+    """The connector's I2S pins (SAI2: TXD out, RXD in) as a USB Audio Class 1 device, which the
+    guest's snd-usb-audio makes an ALSA card. A Comet has that card only once an extension's overlay
+    adds its codec, so the hub serves this only while the attached extension sets i2s = True.
+
+    One format, as a typical I2S codec runs: 48 kHz, 16-bit stereo, 192 bytes per 1 ms frame.
+    Interfaces: 0 audio control, 1 playback (alt 1 streams), 2 capture (alt 1 streams).
+    """
+    vid, pid, bcd = 0x1209, 0x0002, 0x0100
+    manufacturer, product = "mechumu", "Comet SAI2"
+    RATE, FRAME = 48000, 4
+    PACKET = RATE // 1000 * FRAME
+
+    # Audio control: USB streaming in (1) -> I2S out (2); I2S in (3) -> USB streaming out (4).
+    _terminals = (struct.pack("<BBBBHBBHBB", 12, 0x24, 2, 1, 0x0101, 0, 2, 3, 0, 0)    # input terminal: USB streaming
+                  + struct.pack("<BBBBHBBB", 9, 0x24, 3, 2, 0x0602, 0, 1, 0)          # output terminal: digital audio interface
+                  + struct.pack("<BBBBHBBHBB", 12, 0x24, 2, 3, 0x0602, 0, 2, 3, 0, 0)  # input terminal: digital audio interface
+                  + struct.pack("<BBBBHBBB", 9, 0x24, 3, 4, 0x0101, 0, 3, 0))         # output terminal: USB streaming
+    _ac = struct.pack("<BBBHHBBB", 10, 0x24, 1, 0x0100, 10 + len(_terminals), 2, 1, 2) + _terminals
+
+    interfaces = ([iface(1, 1, extra=_ac)] + _audio_stream(1, 0x01, "iso-adaptive", RATE, PACKET)
+                  + _audio_stream(4, 0x82, "iso-async", RATE, PACKET))
+
+    def __init__(self, attached):
+        super().__init__()
+        self.attached = attached  # () -> the attached extension Device, or None
+        self.played, self.peak = 0, 0  # frames played, loudest sample since `ctl i2s` last asked
+
+    def control(self, setup, data):
+        rtype, req, value, index, length = struct.unpack("<BBHHH", setup)
+        if rtype & 0x1F == 2 and value == 0x0100:  # endpoint's sampling frequency: SET_CUR / GET_CUR
+            return b"" if req == 0x01 else self.RATE.to_bytes(3, "little")[:length]
+        return None
+
+    def iso_out(self, ep, packets):
+        data = b"".join(packets)
+        data = data[:len(data) // 2 * 2]
+        self.played += len(data) // self.FRAME
+        if data:
+            self.peak = max(self.peak, max(abs(s) for (s,) in struct.iter_unpack("<h", data)))
+        ext = self.attached()
+        if ext:
+            ext.on_i2s(data)
+
+    def iso_in(self, ep, sizes):
+        ext = self.attached()
+        out = []
+        for n in sizes:
+            n = min(n, self.PACKET)
+            got = ext.i2s_capture(n) if ext else None
+            out.append(bytes(got or b"").ljust(n, b"\0")[:n])
+        return out
+
+
 # --- USB/IP server ---------------------------------------------------------------------------
 
 OP_REQ_IMPORT, OP_REP_IMPORT = 0x8003, 0x0003
@@ -345,17 +434,20 @@ class Connection:
         self.wlock = threading.Lock()
         self.open = set()  # seqnums submitted and not yet answered
         self.olock = threading.Lock()
+        self.clock = {}    # isochronous endpoint -> when its queued frames will have gone by
 
-    def complete(self, seqnum, status, data=b"", sent=0):
-        """Answer a URB with IN data, or with the byte count of an OUT; False if the guest unlinked it."""
+    def complete(self, seqnum, status, data=b"", sent=0, iso=()):
+        """Answer a URB with IN data, or with the byte count of an OUT; False if the guest unlinked it.
+        iso: an isochronous URB's packet descriptors (offset, length, actual length), after the data."""
         with self.olock:
             if seqnum not in self.open:
                 return False
             self.open.discard(seqnum)
-        hdr = struct.pack(">IIIII iiiii 8x", RET_SUBMIT, seqnum, 0, 0, 0, status, len(data) or sent, 0, 0, 0)
+        hdr = struct.pack(">IIIII iiiii 8x", RET_SUBMIT, seqnum, 0, 0, 0, status, len(data) or sent, 0, len(iso), 0)
+        descs = b"".join(struct.pack(">IIII", o, n, a, 0) for o, n, a in iso)
         try:
             with self.wlock:
-                self.sock.sendall(hdr + data)
+                self.sock.sendall(hdr + data + descs)
         except OSError:
             return False
         return True
@@ -378,12 +470,13 @@ class Connection:
             _flags, length, _sf, npackets, _interval = struct.unpack(">Iiiii", rest[:20])
             setup = rest[20:28]
             data = recv_exact(self.sock, length) if direction == 0 and length > 0 else b""
-            if npackets > 0:
-                recv_exact(self.sock, 16 * npackets)  # isochronous descriptors: not supported
+            descs = recv_exact(self.sock, 16 * npackets) if npackets > 0 else b""
             with self.olock:
                 self.open.add(seqnum)
             try:
-                if epnum == 0:
+                if descs:
+                    self.iso(seqnum, direction, epnum, [struct.unpack_from(">II", descs, 16 * i) for i in range(npackets)], data)
+                elif epnum == 0:
                     reply = self.device._control(setup, data)
                     if reply is None:
                         self.complete(seqnum, -EPIPE)  # stall
@@ -400,6 +493,45 @@ class Connection:
                 print(f"mechumu: {type(self.device).__name__}: {e!r}", flush=True)
                 self.complete(seqnum, -EPIPE)
 
+    def iso(self, seqnum, direction, epnum, packets, data):
+        """An isochronous URB: packets are (offset, length), one per 1 ms frame (full speed). It
+        completes when its last frame would have gone by on the wire, so audio plays in real time."""
+        if direction == 0:
+            self.device.iso_out(epnum, [data[o:o + n] for o, n in packets])
+            payload, actual = b"", [n for _, n in packets]
+        else:
+            got = [bytes(p)[:n] for p, (_, n) in zip(self.device.iso_in(0x80 | epnum, [n for _, n in packets]), packets)]
+            payload, actual = b"".join(got), [len(p) for p in got]
+        iso = [(o, n, a) for (o, n), a in zip(packets, actual)]
+        key = (direction, epnum)
+        due = self.clock[key] = max(time.monotonic(), self.clock.get(key, 0)) + len(packets) / 1000
+        later(due, lambda: self.complete(seqnum, 0, payload, sent=sum(actual), iso=iso))
+
+
+_timers, _timers_cv = [], threading.Condition()
+
+
+def later(when, fn):
+    """Run fn at time.monotonic() == when, on one shared timer thread."""
+    with _timers_cv:
+        if not hasattr(later, "thread"):
+            later.thread = threading.Thread(target=_run_timers, daemon=True)
+            later.thread.start()
+        heapq.heappush(_timers, (when, id(fn), fn))
+        _timers_cv.notify()
+
+
+def _run_timers():
+    while True:
+        with _timers_cv:
+            while not _timers or _timers[0][0] > time.monotonic():
+                _timers_cv.wait(_timers[0][0] - time.monotonic() if _timers else None)
+            _, _, fn = heapq.heappop(_timers)
+        try:
+            fn()
+        except Exception as e:  # one bad completion must not stop every other endpoint's clock
+            print(f"mechumu: timer: {e!r}", flush=True)
+
 
 def import_reply(busid, device):
     """OP_REP_IMPORT: the usbip_usb_device record the guest's attach needs."""
@@ -407,7 +539,7 @@ def import_reply(busid, device):
     return struct.pack(">HHI", 0x0111, OP_REP_IMPORT, 0) + struct.pack(
         ">256s32sIIIHHHBBBBBB", f"/mechumu/{busid}".encode(), busid.encode(), busnum, devnum,
         device.speed, device.vid, device.pid, device.bcd, device.cls, device.sub, device.proto,
-        1, 1, len(device.interfaces))
+        1, 1, sum(not i.get("alt") for i in device.interfaces))
 
 
 def handshake(sock, lookup):

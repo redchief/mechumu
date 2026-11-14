@@ -7,7 +7,8 @@ guest's own drivers and your apps talk to it exactly as they would to the hardwa
 
 This one is a macro pad (four keys, a USB HID keyboard) with a TMP102 temperature sensor on the
 connector's I2C bus, an LED on GPIO1, a knob (potentiometer) on ADC1, a debug console on UART1,
-an 8-LED bar on SPI (a 74HC595 shift register) and a key backlight dimmed by PWM3.
+an 8-LED bar on SPI (a 74HC595 shift register), a key backlight dimmed by PWM3, and a speaker
+amplifier and microphone on I2S (which gives the Comet a "Comet SAI2" sound card).
 Try it:
 
   mechumu ext attach extensions/example.py
@@ -19,6 +20,9 @@ Try it:
   mechumu ext bar                       # ...and here they are
   mechumu ctl pwm 3 1000 25             # the Comet dims the backlight to 25%...
   mechumu ext backlight                 # ...which the pad sees
+  mechumu ctl i2s play                  # the Comet plays a tone on I2S...
+  mechumu ext speaker                   # ...which the amplifier heard
+  mechumu ext mic 30                    # a 440 Hz tone at 30% on the mic
 
 and in the Virtual Comet (ssh -p 2222 root@localhost):
 
@@ -29,11 +33,12 @@ and in the Virtual Comet (ssh -p 2222 root@localhost):
   echo hi > /dev/comet-uart1                    # the console answers on UART1
   printf '\xff' > /dev/spidev-comet-ext          # light the whole LED bar (any spidev app works)
   ls /sys/bus/usb/drivers/comet-pwm/*/pwm       # two pwmchips: PWM3, then PWM4; use them via sysfs
+  aplay -l                                      # the "Comet SAI2" card: any ALSA or PipeWire app
 
 `mechumu ext attach` reloads the file, so edit, re-attach, repeat. Errors in your model show up in
 out/hub.log.
 """
-import struct
+import math, struct
 from connector import HidDevice
 
 
@@ -67,6 +72,8 @@ class Extension(HidDevice):
         self.reg, self.temp = 0, 25.0
         self.shift, self.bar = 0, 0  # the 74HC595's shift register and its latched outputs
         self.backlight = 0.0         # brightness, 0-1
+        self.heard, self.loudest = 0, 0  # audio frames the amplifier got, and their peak (0-32767)
+        self.mic, self.mic_phase = 0.0, 0  # mic tone level (0-1) and where its sine wave is
         # TMP102 registers (datasheet SBOS397): 0 temperature, 1 configuration, 2/3 alert limits.
         self.regs = {1: b"\x60\xa0", 2: self.celsius(75.0), 3: self.celsius(80.0)}
 
@@ -113,6 +120,23 @@ class Extension(HidDevice):
         if n == 3:
             self.backlight = duty_ns / period_ns if enabled and period_ns else 0.0
 
+    # --- the connector's I2S pins: 48 kHz, 16-bit stereo, 4 bytes per frame ------------------
+    i2s = True
+
+    def on_i2s(self, frames):
+        """The Comet played audio on TXD: the amplifier drives the speaker with it."""
+        self.heard += len(frames) // 4
+        self.loudest = max([self.loudest] + [abs(s) for (s,) in struct.iter_unpack("<h", frames)])
+
+    def i2s_capture(self, nbytes):
+        """The Comet records RXD: the microphone hears a 440 Hz tone at self.mic."""
+        out = b""
+        for _ in range(nbytes // 4):
+            s = round(32767 * self.mic * math.sin(2 * math.pi * 440 * self.mic_phase / 48000))
+            out += struct.pack("<hh", s, s)
+            self.mic_phase = (self.mic_phase + 1) % 48000
+        return out
+
     # --- the connector's SPI pins ------------------------------------------------------------
     def spi_transfer(self, data):
         """Bits shift in on MOSI; what falls out the far end (QH', wired to MISO) is the byte
@@ -144,4 +168,10 @@ class Extension(HidDevice):
             return "LED bar " + "".join("#" if self.bar >> i & 1 else "." for i in range(8))
         if cmd == "backlight" and not rest:
             return f"backlight {self.backlight:.0%}"
-        raise ValueError("commands: press <1-4> | temp <celsius> | knob <0-3.3> | led | bar | backlight")
+        if cmd == "speaker" and not rest:
+            return f"speaker heard {self.heard / 48000:.2f} s, peak {self.loudest / 32768:.0%}"
+        if cmd == "mic" and len(rest) == 1 and 0 <= float(rest[0]) <= 100:
+            self.mic = float(rest[0]) / 100
+            return f"mic tone at {float(rest[0]):g}%"
+        raise ValueError("commands: press <1-4> | temp <celsius> | knob <0-3.3> | led | bar | backlight"
+                         " | speaker | mic <0-100>")

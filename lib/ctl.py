@@ -6,6 +6,8 @@
   mechumu ctl adc 1 1.65                 # put 1.65 V on connector pin ADC1 (0-3.3)
   mechumu ctl pwm 3 1000 25              # the Comet sets connector pin PWM3: 1 kHz, 25% duty (or: off)
   mechumu ctl pwm                        # PWM3-4 as the Comet last set them
+  mechumu ctl i2s play                   # the Comet plays a tone on connector I2S (or: record)
+  mechumu ctl i2s                        # what the Comet has played on I2S
   mechumu ctl spi a5ff                   # the Comet sends 2 bytes on connector SPI; prints what came back
   mechumu ctl can 123#DEADBEEF           # inject a frame on can0, as if from an extension
   mechumu ctl button home                # press a hardware button: power, home, volup, voldown

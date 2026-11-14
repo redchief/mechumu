@@ -8,7 +8,7 @@ Sets the devices up, then applies one-line commands from the host's control
 port (virtio-serial org.mecha.comet.ctl, held by the host's hub: `mechumu ctl` / `mechumu ext`) and
 answers each with one line: "ok ..." or "error ...", prefixed with the command's "#<id>" if it had one.
 """
-import ctypes, fcntl, glob, os, socket, struct, subprocess, sys, threading, time
+import ctypes, fcntl, glob, math, os, socket, struct, subprocess, sys, threading, time
 import dbus
 
 PORT = "/dev/virtio-ports/org.mecha.comet.ctl"
@@ -189,6 +189,27 @@ def set_pwm(pin, hz, duty):
     open(f"{ch}/enable", "w").write("1")
 
 
+def i2s_card():
+    """The extension's I2S sound card (the hub's 1-4), as an ALSA device name."""
+    for line in open("/proc/asound/cards"):
+        if "Comet SAI2" in line:
+            return f"plughw:{line.split()[0]}"
+    raise RuntimeError("no I2S sound card: attach an extension with i2s = True")
+
+
+def i2s(op):
+    """Play half a second of a 1 kHz tone at half scale, or record half a second and report its peak."""
+    fmt = ["-q", "-D", i2s_card(), "-f", "S16_LE", "-r", "48000", "-c", "2", "-t", "raw"]
+    if op == "play":
+        tone = b"".join(struct.pack("<hh", s, s) for s in
+                        (round(16384 * math.sin(2 * math.pi * 1000 * i / 48000)) for i in range(24000)))
+        subprocess.run(["aplay", *fmt], input=tone, check=True, capture_output=True, timeout=10)
+        return "played 0.5 s, 1 kHz at 50%"
+    rec = subprocess.run(["arecord", *fmt, "-s", "24000"], check=True, capture_output=True, timeout=10).stdout
+    peak = max((abs(s) for (s,) in struct.iter_unpack("<h", rec[:len(rec) // 2 * 2])), default=0)
+    return f"recorded {len(rec) / 4 / 48000:.1f} s, peak {peak / 32768:.0%}"
+
+
 def mock():
     return dbus.Interface(dbus.SystemBus().get_object(UPOWER, "/org/freedesktop/UPower"),
                           "org.freedesktop.DBus.Mock")
@@ -254,6 +275,14 @@ def handle(line):
             raise ValueError("usage: pwm <3|4> <hz> <duty 0-100> | pwm <3|4> off")
         set_pwm(pin, hz, duty)
         return f"PWM{pin} {hz:g} Hz, {duty:g}% duty"
+    if cmd == "i2s" and args in (["play"], ["record"]):
+        return i2s(args[0])
+    if cmd == "bus" and len(args) == 2 and args[0] in ("attach", "detach") and args[1] == "1-4":
+        # the attached extension's I2S sound card: comes and goes with it; no detect key of its own
+        usbip_detach(args[1])
+        if args[0] == "attach":
+            usbip_attach(args[1])
+        return f"{args[1]} {args[0]}ed"
     if cmd == "button" and len(args) == 1 and args[0] in BUTTONS and args[0] != "extension":
         key_event(args[0], 1)
         time.sleep(0.1)
@@ -270,7 +299,7 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | usb | iio | sound")
+    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | i2s play|record | usb | iio | sound")
 
 
 def main():

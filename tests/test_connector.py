@@ -1,7 +1,8 @@
-"""The connector's SPI and PWM pins: the DLN-2 bridge's SPI commands, as spi-dln2 sends them, and
-the PWM interface's requests, as comet-board sends them, reaching an extension model (the example's
-74HC595 LED bar and PWM backlight). Run: python3 tests/test_connector.py"""
-import importlib.util, os, struct, sys
+"""The connector's SPI, PWM and I2S pins: the DLN-2 bridge's SPI commands, as spi-dln2 sends them,
+the PWM interface's requests, as comet-board sends them, and isochronous audio over USB/IP, as
+vhci-hcd sends it, reaching an extension model (the example's 74HC595 LED bar, PWM backlight and
+I2S speaker and mic). Run: python3 tests/test_connector.py"""
+import importlib.util, os, socket, struct, sys, threading, time
 here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(here, "..", "lib"))
 import connector
@@ -46,4 +47,45 @@ assert set_pwm(1, 500, 100, 0, 0) == b"" and pad.backlight == 0.75 and b.pwm[4] 
 assert set_pwm(0, 1_000_000, 0, 0, 0) == b"" and pad.backlight == 0.0
 assert set_pwm(2, 1, 1, 0, 1) is None                                           # no such pin: stall
 assert len(connector.Bridge(lambda: None).interfaces) == 2
+
+# I2S: isochronous URBs over USB/IP, as vhci-hcd sends them; each completes in real time.
+pad = example.Extension()
+i2s = connector.I2s(lambda: pad)
+cfg = i2s.descriptor(2, 0, 0)
+assert cfg[4] == 3 and struct.unpack_from("<H", cfg, 2)[0] == len(cfg)  # three interfaces, all of it counted
+guest, host = socket.socketpair()
+guest.settimeout(5)
+threading.Thread(target=connector.Connection(host, i2s).serve, daemon=True).start()
+
+
+def submit(seqnum, direction, epnum, packets, data=b""):
+    """CMD_SUBMIT of an isochronous URB with packets of the given sizes; returns (header, data, descriptors)."""
+    sizes = list(packets)
+    guest.sendall(struct.pack(">IIIII Iiiii 8x", 1, seqnum, 0, direction, epnum, 0, sum(sizes), 0, len(sizes), 1)
+                  + data + b"".join(struct.pack(">IIII", sum(sizes[:i]), n, 0, 0) for i, n in enumerate(sizes)))
+
+
+def reply(direction):
+    hdr = connector.recv_exact(guest, 48)
+    _, seqnum, _, _, _, status, actual, _, npackets, _ = struct.unpack(">IIIII iiiii", hdr[:40])
+    data = connector.recv_exact(guest, actual) if actual and direction else b""  # IN replies carry data
+    descs = [struct.unpack(">IIII", connector.recv_exact(guest, 16)) for _ in range(npackets)]
+    return seqnum, status, actual, data, descs
+
+
+tone = struct.pack("<hh", 16384, -16384) * 48 * 8  # 8 ms of a full-scale-half square wave
+start = time.monotonic()
+submit(1, 0, 1, [192] * 8, tone)    # playback: 8 frames
+submit(2, 0, 1, [192] * 8, tone)    # and 8 more, queued behind them
+first, second = reply(0), reply(0)
+took = time.monotonic() - start
+assert first[:3] == (1, 0, 192 * 8) and second[0] == 2 and all(d[2] == 192 for d in first[4]), first
+assert 0.014 <= took < 0.1, took    # 16 ms of audio took 16 ms: the guest's playback clock
+assert pad.heard == 16 * 48 and pad.loudest == 16384 and i2s.played == 16 * 48
+pad.command(["mic", "50"])
+submit(3, 1, 2, [200] * 4)          # capture: the guest asks for up to 200 bytes per frame
+seqnum, status, actual, data, descs = reply(1)
+assert (seqnum, status, actual) == (3, 0, 192 * 4) and [d[2] for d in descs] == [192] * 4
+samples = [s for (s,) in struct.iter_unpack("<h", data)]
+assert 16000 < max(samples) <= 16384 and samples[0::2] == samples[1::2]  # the mic's 440 Hz tone, both channels
 print("ok")
