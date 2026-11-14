@@ -49,6 +49,9 @@ class Device:
         if self.connector:
             self.connector.bridge.drive(n - 1, value)
 
+    def on_pwm(self, n, period_ns, duty_ns, enabled):
+        """The Comet set PWM<n> (3 or 4): high for duty_ns of every period_ns while enabled."""
+
     def adc(self, n):
         """Volts on ADC<n> when the Comet samples it (0-3.3), or None for the `mechumu ctl adc` value."""
         return None
@@ -60,6 +63,14 @@ class Device:
         """Send bytes to the Comet on UART<n>."""
         if self.connector:
             self.connector.uart_send(n, data)
+
+    # The connector's SPI pins: the Comet is the controller, with one chip select.
+    def spi_transfer(self, data):
+        """The Comet clocked data out on MOSI: return as many bytes for MISO (None reads as zeros)."""
+        return None
+
+    def spi_deselect(self):
+        """Chip select went high: the end of a transaction."""
 
     # The connector's I2C pins: return True to ACK a write, bytes to answer a read.
     # By default an extension answers mechanix's detection probe: the extensions service writes an
@@ -174,9 +185,9 @@ class HidDevice(Device):
 
 
 class Bridge(Device):
-    """The connector's low-speed pins: I2C, GPIO1-5 and ADC1-4, as a Diolan DLN-2 USB adapter, whose
+    """The connector's low-speed pins: I2C, SPI, GPIO1-5, ADC1-4 and PWM3-4, as a Diolan DLN-2 USB adapter, whose
     mainline drivers (dln2, i2c-dln2, gpio-dln2, dln2-adc, spi-dln2) give the guest a real I2C bus,
-    gpiochip and IIO ADC. Whatever the guest does on them reaches the attached extension's model.
+    gpiochip, IIO ADC and SPI controller. Whatever the guest does on them reaches the attached extension's model.
 
     Protocol: requests arrive on bulk OUT as a header (size, id, echo, handle) plus payload; each gets
     one reply on bulk IN with the same header and a 16-bit result (<= 0x80 is success) before its
@@ -185,8 +196,9 @@ class Bridge(Device):
     """
     vid, pid, bcd = 0xA257, 0x2013, 0x0100
     manufacturer, product = "mechumu", "Comet extension connector"
-    interfaces = [iface(0xFF, eps=[ep(0x81, "bulk", 64), ep(0x01, "bulk", 64)])]
-    GPIO_PINS, ADC_CHANNELS = 5, 4
+    # Interface 1 is mechumu's own, for PWM3-4 (no DLN-2 has PWM): kmod/comet-board drives it.
+    interfaces = [iface(0xFF, eps=[ep(0x81, "bulk", 64), ep(0x01, "bulk", 64)]), iface(0xFF)]
+    GPIO_PINS, ADC_CHANNELS, PWM_PINS = 5, 4, (3, 4)
     OK, FAIL = 0, 0x83  # results: success, and a generic failure (NAK on I2C)
 
     def __init__(self, attached):
@@ -195,6 +207,7 @@ class Bridge(Device):
         self.gpio_dir = [0] * self.GPIO_PINS    # the Comet's side: 0 input, 1 output
         self.gpio_out = [0] * self.GPIO_PINS    # what the Comet drives
         self.gpio_event = [0] * self.GPIO_PINS  # interrupt type the Comet asked for (0 none)
+        self.pwm = {n: (0, 0, False) for n in self.PWM_PINS}  # period ns, high time ns, enabled
         self.unplugged()
 
     def unplugged(self):
@@ -216,6 +229,19 @@ class Bridge(Device):
         return self.gpio_out[pin] if self.gpio_dir[pin] else self.gpio_in[pin]
 
     # --- the guest's side ------------------------------------------------------------------------
+    def control(self, setup, data):
+        rtype, req, value, index, _ = struct.unpack("<BBHHH", setup)
+        # SET_PWM (vendor, to interface 1): wValue 0 = PWM3, 1 = PWM4; period, duty, inversed, enabled
+        if (rtype, req, index) == (0x41, 0x01, 1) and value < len(self.PWM_PINS) and len(data) == 18:
+            period, duty, inversed, enabled = struct.unpack("<QQBB", data)
+            n = self.PWM_PINS[value]
+            self.pwm[n] = (period, period - duty if inversed else duty, bool(enabled))
+            ext = self.attached()
+            if ext:
+                ext.on_pwm(n, *self.pwm[n])
+            return b""
+        return None
+
     def reply(self, handle, cmd, echo, data=b"", result=OK):
         body = (struct.pack("<H", result) if handle else b"") + data
         self.send(0x81, struct.pack("<HHHH", 8 + len(body), cmd, echo, handle) + body)
@@ -276,11 +302,21 @@ class Bridge(Device):
                 volts = self.adc_volts[ch] if volts is None else volts
                 return self.OK, struct.pack("<H", max(0, min(1023, round(volts / 3.3 * 1024))))
             return self.OK, b""
-        if module == 0x02:  # SPI: enough for the controller to register
-            # shortcut: no SPI transfers; Linux only makes spidev devices from DT/ACPI, which QEMU's virt machine lacks here.
+        if module == 0x02:  # SPI: one port, one chip select, 8-bit frames
+            if op in (0x1A, 0x1B, 0x1C):  # READ_WRITE, READ, WRITE: port, size, attr, MOSI bytes
+                _, n, attr = struct.unpack_from("<BHB", p)
+                miso = ext.spi_transfer(bytes(p[4:4 + n]) if op != 0x1B else bytes(n)) if ext else None
+                if ext and not attr & 1:  # DLN2_SPI_ATTR_LEAVE_SS_LOW unset: chip select released
+                    ext.spi_deselect()
+                if op == 0x1C:
+                    return self.OK, b""
+                return self.OK, struct.pack("<H", n) + bytes(miso or b"").ljust(n, b"\0")[:n]
+            if op == 0x18:  # SET_FREQUENCY: port, speed; answers with the speed it set
+                return self.OK, bytes(p[1:5])
+            # GET_SS_COUNT, GET_MIN/MAX_FREQUENCY, GET_SUPPORTED_FRAME_SIZES (one: 8 bits)
             replies = {0x44: struct.pack("<H", 1), 0x45: struct.pack("<I", 1000), 0x46: struct.pack("<I", 24_000_000),
                        0x43: bytes([1, 8]).ljust(37, b"\0")}
-            return self.OK, replies.get(op, b"")
+            return self.OK, replies.get(op, b"")  # mode, frame size, chip select: nothing to model
         return self.FAIL, b""
 
 

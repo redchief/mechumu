@@ -80,7 +80,7 @@ class Hub:
         self.ext = self.name = None
         self.bridge.unplugged()
 
-    # --- pins the hub simulates itself: `mechumu ctl gpio` / `ctl adc` --------------------------
+    # --- pins the hub simulates itself: `mechumu ctl gpio` / `ctl adc` / `ctl pwm` ---------------
     def pins(self, cmd, args):
         b = self.bridge
         if cmd == "gpio" and not args:
@@ -96,7 +96,12 @@ class Hub:
                 return "error volts must be 0-3.3"
             b.adc_volts[int(args[0]) - 1] = v
             return f"ok ADC{args[0]} at {v:g} V"
-        return f"error usage: gpio [<1-{b.GPIO_PINS}> <0|1>] | adc <1-{b.ADC_CHANNELS}> <volts>"
+        if cmd == "pwm" and args:  # setting one: the guest does that, through its own pwmchip
+            return self.guest_raw("pwm " + " ".join(args))
+        if cmd == "pwm":
+            return "ok " + " ".join(f"PWM{n}=" + (f"{1e9 / p:g}Hz@{d / p:.0%}" if e and p else "off")
+                                    for n, (p, d, e) in b.pwm.items())
+        return f"error usage: gpio [<1-{b.GPIO_PINS}> <0|1>] | adc <1-{b.ADC_CHANNELS}> <volts> | pwm"
 
     # --- UART1/UART2: QEMU's PCI serial ports, guest side /dev/comet-uart1|2 ----------------------
     def serve_uart(self, n):
@@ -182,7 +187,7 @@ class Hub:
         if line.startswith("ctl "):
             cmd, *args = line[4:].split() or [""]
             try:
-                if cmd in ("gpio", "adc"):
+                if cmd in ("gpio", "adc", "pwm"):
                     return self.pins(cmd, args)
                 if cmd in ("light", "tilt", "accel", "gyro", "heading", "sensors"):
                     return self.sensors.ctl(cmd, args) or ("error usage: light <lux> | tilt <pitch> <roll> | "

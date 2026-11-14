@@ -12,3 +12,7 @@ SUBSYSTEM=="gpio", KERNEL=="gpiochip*", ATTRS{idVendor}=="a257", ATTRS{idProduct
 # UART1 and UART2: QEMU PCI serial ports at fixed addresses (lib/run-virt.sh).
 SUBSYSTEM=="tty", KERNELS=="0000:00:1e.0", SYMLINK+="comet-uart1", GROUP="gpio", MODE="0660"
 SUBSYSTEM=="tty", KERNELS=="0000:00:1f.0", SYMLINK+="comet-uart2", GROUP="gpio", MODE="0660"
+# SPI: the comet-board module puts one device (comet-ext-spi) on the DLN-2's controller; bind spidev
+# to it, as Documentation/spi/spidev.rst suggests for devices with no driver of their own.
+SUBSYSTEM=="spi", ENV{MODALIAS}=="spi:comet-ext-spi", ATTR{driver_override}="spidev", RUN{builtin}+="kmod load spidev", RUN+="/bin/sh -c 'echo %k > /sys/bus/spi/drivers_probe'"
+SUBSYSTEM=="spidev", ATTRS{idVendor}=="a257", ATTRS{idProduct}=="2013", SYMLINK+="spidev-comet-ext", GROUP="gpio", MODE="0660"

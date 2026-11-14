@@ -58,6 +58,17 @@ else
     GPU=(-device virtio-gpu-gl-pci,xres=1080,yres=1240 -display gtk,gl=on,zoom-to-fit=on)
 fi
 
+# Sound: the Comet's MAX98090 (speaker, headphones, mic) becomes a virtio sound card, played on the
+# host's audio output. Headless runs make no sound. QEMU's coreaudio backend is playback-only, so on
+# macOS the card has no mic (streams=1: output only) rather than one that records silence.
+if [[ -n $HEADLESS ]]; then
+    AUDIO=(-audiodev none,id=snd0 -device virtio-sound-pci,audiodev=snd0)
+elif [[ "$(uname -s)" == Darwin ]]; then
+    AUDIO=(-audiodev coreaudio,id=snd0 -device virtio-sound-pci,audiodev=snd0,streams=1)
+else
+    AUDIO=(-device virtio-sound-pci)  # QEMU's default backend: PipeWire, PulseAudio, ...
+fi
+
 # Settings for the guest travel as systemd credentials in SMBIOS OEM strings; QEMU option values
 # double their commas. --app is read by comet-app.service; your SSH public key lets you in as root
 # (ssh -p 2222 root@localhost), since images built without a password ship the mecha account locked.
@@ -94,6 +105,7 @@ exec qemu-system-aarch64 \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
     -device virtio-net-pci,netdev=net0 \
     "${GPU[@]}" \
+    "${AUDIO[@]}" \
     -device virtio-tablet-pci \
     -device virtio-multitouch-pci \
     -device virtio-keyboard-pci \

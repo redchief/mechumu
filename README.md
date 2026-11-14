@@ -69,6 +69,9 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 ./mechumu ctl gpio 3 1                 # drive connector pin GPIO3 high
 ./mechumu ctl gpio                     # GPIO1-5: direction and level
 ./mechumu ctl adc 1 1.65               # put 1.65 V on connector pin ADC1
+./mechumu ctl spi a5ff                 # send 2 bytes on connector SPI; prints what came back
+./mechumu ctl pwm 3 1000 25            # set connector pin PWM3 to 1 kHz, 25% duty, as a guest app would
+./mechumu ctl pwm                      # PWM3-4 as the Comet last set them
 ./mechumu ctl can 123#DEADBEEF         # inject a CAN frame on can0
 ./mechumu ctl button home              # press a button: power, home, volup, voldown
 ./mechumu ctl light 500                # ambient light in lux
@@ -82,11 +85,14 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Connector GPIO1–5 | Lines 0–4 of `/dev/gpiochip-comet-ext`, with interrupts | `gpioget`, `gpiomon`, libgpiod (user `mecha` is in group `gpio`) |
 | Connector ADC1–4 | An IIO ADC, 10 bits over 3.3 V | `/sys/bus/iio/devices/iio:device0/in_voltage<0-3>_raw` |
 | Connector I2C | `/dev/i2c-comet-ext` | `i2c-dev`, kernel drivers via `new_device` |
+| Connector PWM3, PWM4 | Two one-channel pwmchips, as on a Comet (`ls /sys/bus/usb/drivers/comet-pwm/*/pwm`: PWM3 first) | The PWM sysfs interface (`export`, `period`, `duty_cycle`, `enable`) |
+| Connector SPI | `/dev/spidev-comet-ext` (one chip select, 8-bit words) | Any spidev program (user `mecha` is in group `gpio`) |
 | Connector UART1, UART2 | `/dev/comet-uart1`, `/dev/comet-uart2` (16550s) | Any serial program |
 | CAN bus | Virtual CAN interface `can0` | `candump can0`, SocketCAN |
 | IMU (ICM-42605) | IIO devices `icm42605-accel` and `icm42605-gyro`, via the stock driver | `in_accel_*_raw`, iio-sensor-proxy orientation (`monitor-sensor`) |
 | Ambient light sensor (OPT3001) | IIO device `opt3001` | `in_illuminance_input`, iio-sensor-proxy light level |
 | Magnetometer (LIS2MDL) | IIO device `lis2mdl` | `in_magn_*_raw` |
+| Audio (MAX98090: speaker, headphones, mic) | A virtio sound card, PipeWire's default output (and input, on Linux hosts); plays on your computer's speakers (silent with `--headless`) | Any PipeWire, PulseAudio or ALSA app |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
 The connector's pins carry whatever the attached extension does (see
@@ -134,7 +140,8 @@ Attaching or removing an extension also does what it does on a device:
 An extension model is a Python file. [`extensions/example.py`](extensions/example.py)
 is a commented template: a macro pad (a USB HID keyboard with four keys) with a
 TMP102 temperature sensor on the connector's I2C bus, an LED on GPIO1, a knob on
-ADC1 and a console on UART1. Copy it, then:
+ADC1, a console on UART1, an LED bar on SPI (a 74HC595 shift register) and a
+backlight dimmed by PWM3. Copy it, then:
 
 ```sh
 ./mechumu ext attach my_extension.py   # attach it again after each edit to reload it
@@ -149,8 +156,8 @@ cat /sys/class/hwmon/hwmon*/temp1_input
 ```
 
 A model describes its USB device (IDs, strings, interfaces and endpoints, or just
-a HID report descriptor), answers the connector's I2C transfers (`i2c_write`,
-`i2c_read`), and hears and drives its other pins (`on_gpio` / `set_gpio`, `adc`,
+a HID report descriptor), answers the connector's I2C and SPI transfers (`i2c_write`,
+`i2c_read`, `spi_transfer`, `spi_deselect`), and hears and drives its other pins (`on_gpio` / `set_gpio`, `on_pwm`, `adc`,
 `on_uart` / `uart_send`); the guest's own drivers do the rest. [`lib/connector.py`](lib/connector.py) has the base
 classes. Errors in a model land in `out/hub.log`.
 
@@ -234,10 +241,13 @@ Mecha's Comet package repository, exactly as on a device.
 The extension connector is a USB/IP server, `lib/hub.py`, which `mechumu run`
 starts next to QEMU. On `ext attach`, `comet-simd` in the guest imports the
 extension's USB device from it into the kernel's `vhci-hcd`, so `usbhid`,
-`cp210x` and friends bind as on real hardware. The connector's I2C, GPIO and ADC
+`cp210x` and friends bind as on real hardware. The connector's I2C, SPI, GPIO and ADC
 pins are an always-attached Diolan DLN-2 adapter from the same server, which
-mainline drivers turn into an I2C bus, a gpiochip and an IIO ADC; the hub passes
-each transfer to the attached model. UART1 and UART2 are QEMU PCI serial ports
+mainline drivers turn into an I2C bus, an SPI controller, a gpiochip and an IIO
+ADC; the hub passes each transfer to the attached model. Linux only creates SPI
+devices from firmware, so the comet-board module (below) adds one for spidev. No
+DLN-2 has PWM, so the adapter has a second interface of mechumu's own for PWM3
+and PWM4, and comet-board's USB driver turns it into two pwmchips. UART1 and UART2 are QEMU PCI serial ports
 whose other ends the hub holds.
 
 The Comet's onboard sensors sit on its internal I2C3 bus. The same server
@@ -250,7 +260,7 @@ takes its configuration from it.
 
 The `virt` profile differs from the device image in a few places:
 
-- It uses the generic `virt` machine (virtio GPU, input, disk and network) instead of the i.MX8MP board.
+- It uses the generic `virt` machine (virtio GPU, input, sound, disk and network) instead of the i.MX8MP board.
 - The session renders to QEMU's `Virtual-1` output.
 - The Comet's USB gadget and backlight services are left out.
 
@@ -258,10 +268,11 @@ The `virt` profile differs from the device image in a few places:
 
 - **IMU buffering:** the IMU's data-ready interrupt never fires, so raw reads and polling work but FIFO-buffered capture doesn't; iio-sensor-proxy is set to poll it.
 - **Sensor axes:** chosen so iio-sensor-proxy reports the right orientation; the Comet's actual mounting (its mount matrix) isn't published.
-- **Connector pins:** USB, I2C, GPIO, ADC and the UARTs reach the model; CAN is a guest-side `can0`. SPI registers a controller (`spi0`) but carries no transfers: Linux creates SPI devices from a devicetree, which QEMU's `virt` machine doesn't give the connector. PWM and I2S aren't simulated.
+- **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S (the SAI2 pins) isn't simulated.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
 - **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. Through VNC the screen gets mouse events, not multi-touch.
+- **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `VirtIO SoundCard`, not `max98090-audio`. On macOS, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
 - **EVK peripherals:** the model doesn't include the board's PMIC and I2C expanders, so their drivers log probe errors.
 
@@ -271,7 +282,7 @@ Issues and pull requests are welcome. Some guidelines:
 
 - **Fixes to Mecha's code** should go upstream first. A patch in `patches/` is a stopgap until upstream ships the change, and each patch header says where it is meant to go.
 - **Moving a pin:** update the commit in `build/build.sh`, then check that the patches still apply.
-- **Testing:** before sending a change, run `python3 tests/test_sensors.py` (no VM needed) and `tests/smoke.sh`, which boots the Virtual Comet headless and exercises every `mechumu ctl` command and every built-in extension end to end through the guest.
+- **Testing:** before sending a change, run `python3 tests/test_sensors.py` and `python3 tests/test_connector.py` (no VM needed) and `tests/smoke.sh`, which boots the Virtual Comet headless and exercises every `mechumu ctl` command and every built-in extension end to end through the guest.
 
 ## License
 

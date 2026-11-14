@@ -1,13 +1,14 @@
 #!/usr/bin/python3
 """Virtual Comet hardware: CAN (vcan), battery (mock UPower), hardware buttons (uinput) and the
-extension connector (USB/IP from the host's `mechumu` hub; its GPIO, ADC and I2C pins are a DLN-2
-adapter there, so `mechumu ctl gpio/adc` never reach this daemon).
+extension connector (USB/IP from the host's `mechumu` hub; its GPIO, ADC, I2C and SPI pins are a
+DLN-2 adapter there, so `mechumu ctl gpio/adc` never reach this daemon; `ctl spi` and `ctl pwm <pin>`
+do, to use the pins the way a guest app would).
 
 Sets the devices up, then applies one-line commands from the host's control
 port (virtio-serial org.mecha.comet.ctl, held by the host's hub: `mechumu ctl` / `mechumu ext`) and
 answers each with one line: "ok ..." or "error ...", prefixed with the command's "#<id>" if it had one.
 """
-import fcntl, glob, os, socket, struct, subprocess, sys, threading, time
+import ctypes, fcntl, glob, os, socket, struct, subprocess, sys, threading, time
 import dbus
 
 PORT = "/dev/virtio-ports/org.mecha.comet.ctl"
@@ -146,6 +147,48 @@ def keep_i2c_attached():
         time.sleep(3)
 
 
+SPIDEV = "/dev/spidev-comet-ext"
+
+
+def spi_transfer(tx):
+    """One full-duplex transfer on the connector's SPI pins, as a userspace spidev app does it."""
+    txbuf, rxbuf = ctypes.create_string_buffer(tx, len(tx)), ctypes.create_string_buffer(len(tx))
+    # struct spi_ioc_transfer: tx_buf, rx_buf, len, speed_hz, delays, bits_per_word, cs_change...
+    xfer = struct.pack("<QQIIHBBBBBB", ctypes.addressof(txbuf), ctypes.addressof(rxbuf), len(tx), 0, 0, 8, 0, 0, 0, 0, 0)
+    fd = os.open(SPIDEV, os.O_RDWR)
+    try:
+        fcntl.ioctl(fd, 0x40206B00, xfer)  # SPI_IOC_MESSAGE(1)
+    finally:
+        os.close(fd)
+    return rxbuf.raw
+
+
+def pwm_chips():
+    """Connector PWM3 and PWM4: comet-board's two pwmchips, made in that order."""
+    chips = glob.glob("/sys/bus/usb/drivers/comet-pwm/*/pwm/pwmchip*")
+    return dict(zip((3, 4), sorted(chips, key=lambda c: int(c.rsplit("pwmchip", 1)[1]))))
+
+
+def set_pwm(pin, hz, duty):
+    """Through sysfs, as a guest app would: export channel 0, then period, duty cycle, enable."""
+    chip = pwm_chips()[pin]
+    if not os.path.isdir(f"{chip}/pwm0"):
+        open(f"{chip}/export", "w").write("0")
+    ch = f"{chip}/pwm0"
+    for _ in range(20):  # the channel's attributes appear just after export
+        if os.path.exists(f"{ch}/enable"):
+            break
+        time.sleep(0.05)
+    if hz is None:
+        open(f"{ch}/enable", "w").write("0")
+        return
+    period = round(1e9 / hz)
+    open(f"{ch}/duty_cycle", "w").write("0")  # duty must never exceed the period, old or new
+    open(f"{ch}/period", "w").write(str(period))
+    open(f"{ch}/duty_cycle", "w").write(str(round(period * duty / 100)))
+    open(f"{ch}/enable", "w").write("1")
+
+
 def mock():
     return dbus.Interface(dbus.SystemBus().get_object(UPOWER, "/org/freedesktop/UPower"),
                           "org.freedesktop.DBus.Mock")
@@ -182,6 +225,9 @@ def handle(line):
     if cmd == "usb" and not args:  # what's on the connector's USB pins, as the guest sees it
         names = [open(f"{d}/product").read().strip() for d in sorted(usb_devices())]
         return ", ".join(names) or "no USB devices"
+    if cmd == "sound" and not args:  # the ALSA cards the guest's drivers made
+        cards = [l.split(":", 1)[1].strip() for l in open("/proc/asound/cards") if l[:3].strip().isdigit()]
+        return ", ".join(cards) or "no sound cards"
     if cmd == "iio" and not args:  # the IIO devices the guest's drivers made, with the light reading
         out = []
         for d in sorted(glob.glob("/sys/bus/iio/devices/iio:device*"), key=lambda p: int(p.rsplit("device", 1)[1])):
@@ -190,6 +236,24 @@ def handle(line):
                 name += f"={float(open(f'{d}/in_illuminance_input').read()):g}lux"
             out.append(name)
         return " ".join(out) or "no IIO devices"
+    if cmd == "spi" and len(args) == 1:  # e.g. spi a5ff: MOSI bytes in, MISO bytes out
+        try:
+            tx = bytes.fromhex(args[0])
+        except ValueError:
+            tx = b""
+        if not 0 < len(tx) <= 256:
+            raise ValueError("usage: spi <1-256 bytes as hex>")
+        return f"spi {tx.hex()} -> {spi_transfer(tx).hex()}"
+    if cmd == "pwm" and args and args[0] in ("3", "4") and (args[1:] == ["off"] or len(args) == 3):
+        pin = int(args[0])
+        if args[1] == "off":
+            set_pwm(pin, None, 0)
+            return f"PWM{pin} off"
+        hz, duty = float(args[1]), float(args[2])
+        if not (0 < hz <= 1e8 and 0 <= duty <= 100):
+            raise ValueError("usage: pwm <3|4> <hz> <duty 0-100> | pwm <3|4> off")
+        set_pwm(pin, hz, duty)
+        return f"PWM{pin} {hz:g} Hz, {duty:g}% duty"
     if cmd == "button" and len(args) == 1 and args[0] in BUTTONS and args[0] != "extension":
         key_event(args[0], 1)
         time.sleep(0.1)
@@ -206,7 +270,7 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | usb | iio")
+    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | usb | iio | sound")
 
 
 def main():

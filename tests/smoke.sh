@@ -37,6 +37,7 @@ expect "opt3001=500lux" ctl iio
 expect "icm42605-accel" ctl iio
 expect "lis2mdl" ctl iio
 expect "ok tilted" ctl tilt 90 0
+expect "VirtIO SoundCard" ctl sound
 # The connector's pin bridge is always there; extensions come and go on its USB pins.
 expect "Comet extension connector" ctl usb
 expect "ok keyboard attached" ext attach keyboard
@@ -45,6 +46,15 @@ expect "ok typed 5 characters" ext type hello
 expect "ok gamepad attached" ext attach gamepad
 expect "Comet Gamepad" ctl usb
 expect "ok a pressed" ext press a
+# The from-scratch example: its LED bar on the connector's SPI pins (the guest's spidev) and its
+# backlight on PWM3 (the guest's pwmchip).
+expect "ok macro-pad attached" ext attach extensions/example.py
+expect "ok spi a5 -> 00" ctl spi a5
+expect "ok spi 3c81 -> a53c" ctl spi 3c81
+expect "LED bar #......#" ext bar
+expect "ok PWM3 1000 Hz, 25% duty" ctl pwm 3 1000 25
+expect "backlight 25%" ext backlight
+expect "ok PWM3=1000Hz@25% PWM4=off" ctl pwm
 expect "ok io-breakout attached" ext attach io-breakout
 expect "CP2102" ctl usb
 expect "ok io-breakout detached" ext detach

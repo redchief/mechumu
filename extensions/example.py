@@ -6,7 +6,8 @@ guest's USB stack and the connector's I2C transfers are answered by its i2c_* me
 guest's own drivers and your apps talk to it exactly as they would to the hardware.
 
 This one is a macro pad (four keys, a USB HID keyboard) with a TMP102 temperature sensor on the
-connector's I2C bus, an LED on GPIO1, a knob (potentiometer) on ADC1 and a debug console on UART1.
+connector's I2C bus, an LED on GPIO1, a knob (potentiometer) on ADC1, a debug console on UART1,
+an 8-LED bar on SPI (a 74HC595 shift register) and a key backlight dimmed by PWM3.
 Try it:
 
   mechumu ext attach extensions/example.py
@@ -14,6 +15,10 @@ Try it:
   mechumu ext temp 31.5                 # what the sensor will read
   mechumu ext knob 2.2                  # turn the knob: ADC1 reads 2.2 V
   mechumu ext led                       # is the LED on?
+  mechumu ctl spi 81                    # the Comet lights the bar's end LEDs...
+  mechumu ext bar                       # ...and here they are
+  mechumu ctl pwm 3 1000 25             # the Comet dims the backlight to 25%...
+  mechumu ext backlight                 # ...which the pad sees
 
 and in the Virtual Comet (ssh -p 2222 root@localhost):
 
@@ -22,6 +27,8 @@ and in the Virtual Comet (ssh -p 2222 root@localhost):
   gpioset -c gpiochip-comet-ext -t 0 0=1        # light the LED (GPIO1 is line 0)
   cat /sys/bus/iio/devices/iio:device0/in_voltage0_raw   # the knob, 0-1023
   echo hi > /dev/comet-uart1                    # the console answers on UART1
+  printf '\xff' > /dev/spidev-comet-ext          # light the whole LED bar (any spidev app works)
+  ls /sys/bus/usb/drivers/comet-pwm/*/pwm       # two pwmchips: PWM3, then PWM4; use them via sysfs
 
 `mechumu ext attach` reloads the file, so edit, re-attach, repeat. Errors in your model show up in
 out/hub.log.
@@ -58,6 +65,8 @@ class Extension(HidDevice):
         super().__init__()
         self.led, self.knob = 0, 1.0
         self.reg, self.temp = 0, 25.0
+        self.shift, self.bar = 0, 0  # the 74HC595's shift register and its latched outputs
+        self.backlight = 0.0         # brightness, 0-1
         # TMP102 registers (datasheet SBOS397): 0 temperature, 1 configuration, 2/3 alert limits.
         self.regs = {1: b"\x60\xa0", 2: self.celsius(75.0), 3: self.celsius(80.0)}
 
@@ -99,6 +108,23 @@ class Extension(HidDevice):
         if n == 1:
             self.uart_send(1, b"macro-pad: " + data)
 
+    def on_pwm(self, n, period_ns, duty_ns, enabled):
+        """The Comet set PWM<n>: PWM3 drives the backlight LEDs, brightness = duty cycle."""
+        if n == 3:
+            self.backlight = duty_ns / period_ns if enabled and period_ns else 0.0
+
+    # --- the connector's SPI pins ------------------------------------------------------------
+    def spi_transfer(self, data):
+        """Bits shift in on MOSI; what falls out the far end (QH', wired to MISO) is the byte
+        clocked in before, so the Comet can read back what it last wrote."""
+        miso = bytes([self.shift]) + bytes(data[:-1])
+        self.shift = data[-1]
+        return miso
+
+    def spi_deselect(self):
+        """Chip select (wired to the latch clock) going high puts the shifted byte on the LEDs."""
+        self.bar = self.shift
+
     # --- driving it from the host: `mechumu ext <command...>` --------------------------------
     def command(self, args):
         cmd, *rest = args
@@ -114,4 +140,8 @@ class Extension(HidDevice):
             return f"knob at {self.knob:g} V"
         if cmd == "led" and not rest:
             return "LED on" if self.led else "LED off"
-        raise ValueError("commands: press <1-4> | temp <celsius> | knob <0-3.3> | led")
+        if cmd == "bar" and not rest:  # LED 1 is the 595's QA output, the last bit shifted in
+            return "LED bar " + "".join("#" if self.bar >> i & 1 else "." for i in range(8))
+        if cmd == "backlight" and not rest:
+            return f"backlight {self.backlight:.0%}"
+        raise ValueError("commands: press <1-4> | temp <celsius> | knob <0-3.3> | led | bar | backlight")
