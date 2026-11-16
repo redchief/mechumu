@@ -1,0 +1,11 @@
+[Unit]
+Description=Virtual Comet: simulated Wi-Fi networks for the Comet's radio
+After=systemd-modules-load.service
+# The access point radios move to their own namespace before NetworkManager can claim them.
+Before=NetworkManager.service
+
+[Service]
+ExecStart=/usr/libexec/comet-wifi-sim
+
+[Install]
+WantedBy=multi-user.target

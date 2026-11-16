@@ -1,0 +1,26 @@
+#!/bin/sh
+# The Virtual Comet's Wi-Fi (comet-wifi-sim.service): three mac80211_hwsim radios. wlan0 is the
+# Comet's, for NetworkManager. The other two move to their own network namespace, as access points
+# for it to find, run by wpa_supplicant in AP mode with dnsmasq for DHCP: in the same namespace the
+# kernel would drop their replies as coming from its own address.
+set -eu
+NS=comet-wifi-ap
+ip netns add "$NS" 2>/dev/null || true
+mkdir -p /run/comet-wifi-sim
+ap() {  # ap <interface> <subnet prefix> <channel MHz> <wpa_supplicant network lines>
+    for _ in $(seq 50); do [ -e "/sys/class/net/$1/phy80211/name" ] && break; sleep 0.1; done
+    iw phy "$(cat "/sys/class/net/$1/phy80211/name")" set netns name "$NS"
+    ip netns exec "$NS" ip addr replace "$2.1/24" dev "$1"
+    ip netns exec "$NS" ip link set "$1" up
+    printf 'p2p_disabled=1\nnetwork={\n  mode=2\n  frequency=%s\n%s\n}\n' "$3" "$4" > "/run/comet-wifi-sim/$1.conf"
+    ip netns exec "$NS" wpa_supplicant -B -i "$1" -c "/run/comet-wifi-sim/$1.conf"
+}
+ap wlan1 192.168.77 2437 '  ssid="Mecha Lab"
+  key_mgmt=WPA-PSK
+  psk="mechumu-wifi"'
+ap wlan2 192.168.78 2462 '  ssid="Comet Guest"
+  key_mgmt=NONE'
+exec ip netns exec "$NS" dnsmasq --keep-in-foreground --conf-file=/dev/null --port=0 --bind-interfaces \
+    --interface=wlan1 --interface=wlan2 --leasefile-ro \
+    --dhcp-range=192.168.77.10,192.168.77.99,12h --dhcp-range=192.168.78.10,192.168.78.99,12h \
+    --dhcp-option=option:router --dhcp-option=option:dns-server

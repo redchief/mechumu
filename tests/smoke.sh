@@ -38,6 +38,7 @@ expect "mechanix-launch" shell pgrep -l mechanix-launch
 expect "ok unlocked" ctl unlock
 expect "ok brightness 70%" ctl brightness
 expect "ok brightness 40%" ctl brightness 40
+expect "192.168.77." shell 'for i in 1 2 3 4 5 6 7 8; do nmcli dev wifi connect "Mecha Lab" password mechumu-wifi ifname wlan0 >/dev/null 2>&1 && break; nmcli dev wifi rescan 2>/dev/null; sleep 2; done; ip -4 -br addr show wlan0'
 # The onboard sensors: set on the host, read back through the guest's own drivers.
 expect "ok light 500 lux" ctl light 500
 expect "opt3001=500lux" ctl iio

@@ -101,3 +101,4 @@ echo "==> $OUT"
 mkdir -p "$OUT"
 qemu-img convert -c -O qcow2 mechanix-os-virt.raw "$OUT/mechanix-os-virt.qcow2"
 "$HERE/build/extract-evk-boot.sh" mechanix-os-virt.raw "$OUT/evk-boot"
+rm -f mechanix-os-virt.raw  # in OUT now, compressed; the raw copy would sit in the cache volume (3.7 GB)

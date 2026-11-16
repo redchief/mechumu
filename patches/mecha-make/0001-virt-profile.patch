@@ -46,10 +46,10 @@ index 1ee231c..4ae854e 100644
 -    kernel-modules-extra-7.1.5-0.mecha.*
 diff --git a/mkosi.conf.d/15-packages-virt-sim.conf b/mkosi.conf.d/15-packages-virt-sim.conf
 new file mode 100644
-index 0000000..f360bd3
+index 0000000..b02892c
 --- /dev/null
 +++ b/mkosi.conf.d/15-packages-virt-sim.conf
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,13 @@
 +# Virtual Comet: simulated hardware (comet-simd) and the tools to poke it
 +
 +[Match]
@@ -61,6 +61,8 @@ index 0000000..f360bd3
 +    iproute
 +    libgpiod-utils
 +    python3-dbusmock
++    # mac80211_hwsim, the simulated Wi-Fi radios (Fedora keeps it out of kernel-modules-extra)
++    kernel-modules-internal-7.1.5-0.mecha.*
 diff --git a/mkosi.conf.d/25-packages-impeller.conf b/mkosi.conf.d/25-packages-impeller.conf
 index b318178..09b4019 100644
 --- a/mkosi.conf.d/25-packages-impeller.conf
