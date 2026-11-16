@@ -328,6 +328,9 @@ class Hub:
         if line.startswith("ctl "):  # the rest of `mechumu ctl`: straight through to comet-simd
             return self.guest_raw(line[4:])
         try:
+            if line == "quit":  # the frame app's window closed and saving failed: just stop QEMU
+                threading.Timer(0.5, lambda: self.qmp("quit")).start()
+                return "ok quitting"
             return "ok " + (self.quickboot_save() if line == "stop" else self.handle(line))
         except Exception as e:
             return f"error {e}"
@@ -354,18 +357,37 @@ class Frame(http.server.BaseHTTPRequestHandler):
         if not self.allowed():
             return self.send_error(403)
         if self.path == "/":
-            body = open(os.path.join(HERE, "frame.html"), "rb").read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_body(open(os.path.join(HERE, "frame.html"), "rb").read(), "text/html; charset=utf-8")
+        elif self.path.startswith("/novnc/"):  # noVNC, vendored in lib/novnc
+            root = os.path.join(HERE, "novnc")
+            path = os.path.realpath(os.path.join(root, self.path[len("/novnc/"):].split("?")[0]))
+            if not path.startswith(root + os.sep) or not path.endswith(".js") or not os.path.isfile(path):
+                return self.send_error(404)
+            self.send_body(open(path, "rb").read(), "text/javascript; charset=utf-8")
+        elif self.path == "/screenshot" and self.headers.get("X-Mechumu") == "1":
+            path = f".frame-shot-{threading.get_ident()}.png"
+            try:
+                self.hub.qmp("screendump", filename=os.path.abspath(path), format="png")
+                body = open(path, "rb").read()
+            except (OSError, RuntimeError) as e:
+                return self.send_error(503, str(e))
+            finally:
+                if os.path.exists(path):
+                    os.unlink(path)
+            self.send_body(body, "image/png")
         elif self.path in ("/vnc", "/touch") and self.headers.get("Upgrade", "").lower() == "websocket":
             if self.headers.get("Origin") != f"http://127.0.0.1:{FRAME_PORT}":
                 return self.send_error(403)
             self.websocket_vnc() if self.path == "/vnc" else self.websocket_touch()
         else:
             self.send_error(404)
+
+    def send_body(self, body, kind):
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if not self.allowed() or self.headers.get("X-Mechumu") != "1" or self.path != "/cmd":

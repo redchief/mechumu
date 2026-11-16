@@ -1,0 +1,13 @@
+[package]
+name = "mechumu-frame"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "The Virtual Comet's device frame in a window of its own"
+
+[dependencies]
+tao = "0.37.2"
+wry = "0.57.2"
+
+[profile.release]
+strip = true

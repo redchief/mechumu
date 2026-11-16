@@ -1,0 +1,2 @@
+noVNC 1.4.0 (https://github.com/novnc/noVNC), from the npm package @novnc/novnc@1.4.0: core/ and
+vendor/ unmodified. MPL-2.0; see LICENSE.txt. The device frame (lib/frame.html) loads it from the hub.

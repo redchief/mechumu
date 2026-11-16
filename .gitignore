@@ -4,3 +4,4 @@ out/
 mechumu.env
 __pycache__/
 .DS_Store
+app/target/

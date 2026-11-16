@@ -15,12 +15,16 @@
   main { display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; align-items: flex-start; padding: 24px 16px; }
 
   /* The Comet: screen module on top, a home pill, the extension below; buttons on the edges. */
-  .device { position: relative; width: min(400px, calc(100vw - 32px)); padding: 10px 10px 14px; border-radius: 26px;
+  /* The device turns inside the stage, which takes the turned device's size. */
+  .stage { position: relative; flex: none; }
+  .device { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(var(--rot, 0deg)); transition: transform .3s;
+            width: min(400px, calc(100vw - 32px)); padding: 10px 10px 14px; border-radius: 26px;
             background: linear-gradient(180deg, #4a4a4d, var(--body) 40%); box-shadow: 0 1px 0 #5a5a5e inset, 0 24px 48px rgba(0,0,0,.5); }
   .screen { aspect-ratio: 1080 / 1240; background: #000; border-radius: 18px; overflow: hidden; position: relative;
             border: 9px solid #0b0b0c; box-shadow: 0 0 0 1px #000; }
   #vnc { position: absolute; inset: 0; touch-action: none; }
-  .screen .hint { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px; }
+  .screen .hint { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px;
+                  background: rgba(0,0,0,.6); }
   .hw { position: absolute; background: #333336; border: 0; border-radius: 3px; cursor: pointer; padding: 0; }
   .hw:hover { background: var(--accent); }
   .hw:active { transform: scale(.94); }
@@ -126,7 +130,8 @@
 </head>
 <body>
 <main>
-  <div class="device" aria-label="Virtual Comet">
+  <div class="stage" id="stage">
+  <div class="device" id="device" aria-label="Virtual Comet">
     <button class="hw power" data-btn="power" title="Power" aria-label="Power button"></button>
     <button class="hw volup" data-btn="volup" title="Volume up" aria-label="Volume up"></button>
     <button class="hw voldown" data-btn="voldown" title="Volume down" aria-label="Volume down"></button>
@@ -134,11 +139,19 @@
     <button class="home" data-btn="home" title="Home" aria-label="Home button"></button>
     <div class="bay" id="bay"></div>
   </div>
+  </div>
 
   <div class="panel">
     <section>
       <h2>Screen</h2>
-      <p class="note" style="margin:0">A touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe.</p>
+      <div class="choices" id="tools">
+        <button id="shot" title="Save a screenshot">Screenshot</button>
+        <button id="rec" title="Record the screen" aria-pressed="false">Record</button>
+        <button data-turn="-90" title="Turn the device left" aria-label="Turn left">⟲</button>
+        <button data-turn="90" title="Turn the device right" aria-label="Turn right">⟳</button>
+        <button id="save" title="Save the device and quit; the next mechumu run resumes it">Save &amp; quit</button>
+      </div>
+      <p class="note">A touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe.</p>
     </section>
     <section>
       <h2>Extension</h2>
@@ -170,11 +183,11 @@
         <span id="lux-v">300 lux</span>
       </div>
       <div class="choices" id="poses" style="margin-top:8px">
-        <button data-tilt="90 0">Upright</button>
-        <button data-tilt="0 0">Flat</button>
-        <button data-tilt="-90 0">Upside down</button>
-        <button data-tilt="0 -90">Landscape ⟲</button>
-        <button data-tilt="0 90">Landscape ⟳</button>
+        <button data-tilt="90 0" data-rot="0">Upright</button>
+        <button data-tilt="0 0" data-rot="0">Flat</button>
+        <button data-tilt="-90 0" data-rot="180">Upside down</button>
+        <button data-tilt="0 -90" data-rot="270">Landscape ⟲</button>
+        <button data-tilt="0 90" data-rot="90">Landscape ⟳</button>
       </div>
       <div class="row2">
         <label for="heading">Heading</label>
@@ -190,8 +203,7 @@
 </main>
 
 <script type="module">
-// shortcut: noVNC loads from jsdelivr, so the frame's screen needs internet on first load; vendor it if offline use matters.
-import RFB from "https://cdn.jsdelivr.net/npm/@novnc/novnc@1.4.0/core/rfb.js";
+import RFB from "/novnc/core/rfb.js";  // vendored in lib/novnc, served by the hub
 
 const $ = (s, el = document) => el.querySelector(s);
 const log = (line) => { const l = $("#log"); l.textContent = (line + "\n" + l.textContent).slice(0, 4000); };
@@ -210,9 +222,63 @@ function connect() {
   rfb.focusOnClick = false;  // the Comet has no keyboard of its own: keys go to the keyboard extension
   rfb.viewOnly = true;  // and no mouse: the screen takes touches (below)
   rfb.addEventListener("connect", () => { $("#hint").hidden = true; });
-  rfb.addEventListener("disconnect", () => { $("#hint").hidden = false; $("#hint").textContent = "Screen disconnected; retrying…"; setTimeout(connect, 2000); });
+  rfb.addEventListener("disconnect", () => {
+    $("#hint").hidden = false;
+    if (saved) return void ($("#hint").textContent = "Saved. 'mechumu run' resumes here.");
+    $("#hint").textContent = "Screen disconnected; retrying…";
+    setTimeout(connect, 2000);
+  });
 }
 connect();
+
+// --- toolbar: screenshot, recording, turning the device, save & quit (Quick Boot) ---------------
+const stamp = () => new Date().toISOString().slice(0, 19).replace(/[-:]/g, "").replace("T", "-");
+const save = (blob, name) => { const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name }); a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 10000); };
+$("#shot").addEventListener("click", async () => {
+  const r = await fetch("/screenshot", { headers: { "X-Mechumu": "1" } });
+  if (!r.ok) return log(`screenshot → error ${r.status}`);
+  save(await r.blob(), `comet-${stamp()}.png`);
+  log("screenshot saved");
+});
+let recorder = null;
+$("#rec").addEventListener("click", () => {
+  if (recorder) return recorder.stop();
+  const canvas = $("canvas", screenEl);
+  const type = ["video/mp4", "video/webm"].find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t));
+  if (!canvas || !type) return log("record → this browser can't record the screen");
+  const parts = [];
+  recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: type });
+  recorder.ondataavailable = (e) => parts.push(e.data);
+  recorder.onstop = () => {
+    save(new Blob(parts, { type }), `comet-${stamp()}.${type.split("/")[1]}`);
+    recorder = null;
+    $("#rec").textContent = "Record"; $("#rec").setAttribute("aria-pressed", "false");
+    log("recording saved");
+  };
+  recorder.start();
+  $("#rec").textContent = "Stop recording"; $("#rec").setAttribute("aria-pressed", "true");
+});
+// Turning the device turns the frame and tells the IMU, as turning a real Comet would.
+let rot = 0;
+const POSE = { 0: "90 0", 90: "0 90", 180: "-90 0", 270: "0 -90" };
+const stage = $("#stage"), device = $("#device");
+function fitStage() {
+  const w = device.offsetWidth, h = device.offsetHeight, side = rot % 180;
+  stage.style.width = `${side ? h : w}px`; stage.style.height = `${side ? w : h}px`;
+}
+function turnTo(r) { rot = ((r % 360) + 360) % 360; device.style.setProperty("--rot", `${rot}deg`); fitStage(); }
+new ResizeObserver(fitStage).observe(device);
+$("#tools").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-turn]");
+  if (b) { turnTo(rot + +b.dataset.turn); cmd(`ctl tilt ${POSE[rot]}`); }
+});
+let saved = false;
+$("#save").addEventListener("click", async () => {
+  $("#hint").hidden = false; $("#hint").textContent = "Saving…";
+  const r = await cmd("stop");
+  saved = r.startsWith("ok");
+  $("#hint").textContent = saved ? "Saved. 'mechumu run' resumes here." : r;
+});
 
 // --- touch: the screen is a touchscreen, as on the Comet ----------------------------------------
 // A click-drag is one finger; Ctrl-drag is a pinch, the second finger mirrored about the screen's
@@ -222,7 +288,11 @@ let touchWs;
 const touch = (m) => touchWs.readyState === 1 && touchWs.send(m);
 const screenEl = $("#vnc");
 const fingers = new Map();  // pointerId -> its slots
-const where = (e) => { const r = ($("canvas", screenEl) || screenEl).getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height, r]; };
+// The screen's on-page box, turned with the device: map back to the panel's own x, y.
+const where = (e) => {
+  const r = ($("canvas", screenEl) || screenEl).getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  return [...{ 0: [u, v], 90: [v, 1 - u], 180: [1 - u, 1 - v], 270: [1 - v, u] }[rot], r];
+};
 const freeSlot = () => { const used = [...fingers.values()].flat(); for (let s = 0; s < 7; s++) if (!used.includes(s)) return s; };
 const mirror = (i, x, y) => (i ? [1 - x, 1 - y] : [x, y]).join(" ");
 screenEl.addEventListener("pointerdown", (e) => {
@@ -268,7 +338,7 @@ $("#bat-s").addEventListener("change", bat);
 const luxOf = () => Math.round(10 ** +$("#lux").value) - ($("#lux").value === "0" ? 1 : 0);
 $("#lux").addEventListener("input", () => { $("#lux-v").textContent = `${luxOf()} lux`; });
 $("#lux").addEventListener("change", () => cmd(`ctl light ${luxOf()}`, true));
-$("#poses").addEventListener("click", (e) => { const b = e.target.closest("[data-tilt]"); if (b) cmd(`ctl tilt ${b.dataset.tilt}`); });
+$("#poses").addEventListener("click", (e) => { const b = e.target.closest("[data-tilt]"); if (b) { cmd(`ctl tilt ${b.dataset.tilt}`); turnTo(+b.dataset.rot); } });
 const compass = (d) => ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(d / 45) % 8];
 $("#heading").addEventListener("input", () => { $("#heading-v").textContent = `${$("#heading").value}° ${compass(+$("#heading").value)}`; });
 $("#heading").addEventListener("change", () => cmd(`ctl heading ${$("#heading").value}`, true));

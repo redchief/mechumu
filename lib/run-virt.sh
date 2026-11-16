@@ -1,18 +1,20 @@
 #!/bin/bash
-# mechumu run [--app <desktop id|command>] [--frame | --headless] [--cold] [-- <qemu args>]
+# mechumu run [--app <desktop id|command>] [--frame [--browser] | --headless] [--cold] [-- <qemu args>]
 # Boots $MECHUMU_OUT/mechanix-os-virt.qcow2 on QEMU's arm64 `virt` machine: the screen in a
-# window (or, with --frame, in a browser page drawn as the device, buttons and extensions included),
+# window (or, with --frame, in a window drawn as the device, buttons and extensions included: the
+# frame app in app/, or a browser tab with --browser or without Rust),
 # the serial console in this terminal (quit with Ctrl-A then X). Changes persist in the image.
 # Quick Boot: `mechumu stop` saves the running device; the next run resumes it (--cold: boot fresh).
 set -euo pipefail
 
-APP= HEADLESS= FRAME= COLD=
+APP= HEADLESS= FRAME= COLD= BROWSER=
 while (($#)); do
     case $1 in
         --app) APP=${2:?--app needs a desktop id or command}; shift 2 ;;
         --headless) HEADLESS=1; shift ;;
         --frame) FRAME=1; shift ;;
         --cold) COLD=1; shift ;;
+        --browser) FRAME=1 BROWSER=1; shift ;;
         --) shift; break ;;
         *) break ;;
     esac
@@ -115,7 +117,15 @@ MECHUMU_QEMU_PID=$$ MECHUMU_RESUME=$RESUME python3 "$LIB/hub.py" >hub.log 2>&1 &
 if [[ -n $FRAME ]]; then
     url=http://127.0.0.1:8090/
     echo "mechumu: the device frame is at $url"
-    (sleep 2; open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || true) &
+    # The frame app (app/), built on first use if Rust is installed; otherwise a browser tab.
+    frame_app() {
+        [[ -z $BROWSER ]] && command -v cargo >/dev/null || return 1
+        [[ -x $LIB/../app/target/release/mechumu-frame ]] || echo "mechumu: building the frame app (once, about a minute)"
+        cargo build -q --release --manifest-path "$LIB/../app/Cargo.toml" >>frame-app.log 2>&1 || {
+            echo "mechumu: couldn't build the frame app (see $PWD/frame-app.log); opening a browser instead"; return 1; }
+        "$LIB/../app/target/release/mechumu-frame" "$url" >>frame-app.log 2>&1 || true  # it ran: no browser too
+    }
+    (frame_app || { sleep 2; open "$url" 2>/dev/null || xdg-open "$url" 2>/dev/null || true; }) </dev/null &
 fi
 
 # acpi=off: the firmware hands Linux a devicetree, as a Comet's bootloader does; the onboard

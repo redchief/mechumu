@@ -39,9 +39,15 @@ git clone https://github.com/redchief/mechumu.git && cd mechumu
 
 The Comet's screen opens in a window and the serial console runs in your
 terminal. For the whole device, run `./mechumu run --frame` instead: the screen
-opens in your browser inside a drawing of the Comet, with working buttons and
-an extension bay (see [Extensions](#extensions)). There the screen is a
-touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe. The UI is up about 20 seconds after launch on an M-series Mac. To quit,
+opens in a window of its own inside a drawing of the Comet, with working buttons
+and an extension bay (see [Extensions](#extensions)), like Android's emulator.
+There the screen is a touchscreen: click or drag for one finger, Ctrl-drag to
+pinch, scroll to swipe. Its toolbar takes screenshots and screen recordings (to
+`~/Downloads`), turns the device (the IMU turns with it), and saves and quits.
+Closing the window saves and quits too (see Quick Boot below). The window is a
+small Rust app in [`app/`](app), built the first time you use `--frame` if you
+have Rust (`cargo`); without it, or with `--browser`, the frame opens in your
+browser instead. The UI is up about 20 seconds after launch on an M-series Mac. To quit,
 press Ctrl-A then X in the terminal. Anything you change inside the Virtual
 Comet is kept in `out/mechanix-os-virt.qcow2`; rebuild for a clean device.
 
@@ -294,7 +300,7 @@ The `virt` profile differs from the device image in a few places:
 - **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM, I2S and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S runs at one format, 48 kHz 16-bit stereo, and the sound card is a USB audio device rather than an SAI-and-codec card, so ALSA names it `Comet SAI2` instead of after the extension's codec.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
-- **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. A mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
+- **Device frame:** a mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
 - **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `HDA Intel`, not `max98090-audio` (HDA rather than virtio sound because QEMU can't snapshot virtio sound, which Quick Boot needs). On macOS and with `--headless`, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
 - **EVK peripherals:** the model doesn't include the board's PMIC and I2C expanders, so their drivers log probe errors.
@@ -310,6 +316,8 @@ Issues and pull requests are welcome. Some guidelines:
 ## License
 
 mechumu is BSD-3-Clause licensed, like the Mecha projects it patches.
+[`lib/novnc`](lib/novnc) is noVNC 1.4.0, unmodified, under the MPL 2.0 (its
+`LICENSE.txt`).
 [LICENSE](LICENSE) covers this repository; images built from it contain
 software under each package's own license. Mecha, Comet and Mechanix are names
 of Mecha's products.

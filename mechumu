@@ -9,10 +9,11 @@ usage() {
     cat <<'USAGE'
 usage: mechumu <command> [options]
 
-  run [--app <desktop id|command>] [--frame | --headless] [--cold] [-- <qemu args>]
+  run [--app <desktop id|command>] [--frame [--browser] | --headless] [--cold] [-- <qemu args>]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
         Resumes in seconds where 'mechumu stop' left off; --cold boots fresh.
-        --frame shows the whole device in your browser: buttons, extension bay.
+        --frame shows the whole device in a window: buttons, extension bay, toolbar
+        (the app in app/, built on first use with Rust; --browser: in your browser instead).
         --app boots straight into one app, e.g. --app org.mechanix.clock
   ctl battery <0-100> [charging|discharging|full] | gpio [<1-5> <0|1>] | adc <1-4> <volts>
       | pwm [<3|4> <hz> <duty>|off] | i2s [play|record] | spi <hex> | can <id>#<hex> | button power|home|volup|voldown
