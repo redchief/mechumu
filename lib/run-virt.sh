@@ -47,6 +47,8 @@ esac
 # The Comet panel's 1080x1240. Homebrew qemu has no virgl, so on macOS the guest renders with
 # Mesa llvmpipe; on Linux, virgl gives the guest host GL.
 # shortcut: macOS cocoa sends mouse, not touch, events; touch only works through the gtk UI on Linux.
+# Headless: wav into /dev/null, not `none`, which paces playback so unevenly that always-open streams
+# (the keyboard's key-tap sound) underrun many times a second.
 if [[ -n $HEADLESS ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none)
 elif [[ -n $FRAME ]]; then
@@ -61,8 +63,10 @@ fi
 # Sound: the Comet's MAX98090 (speaker, headphones, mic) becomes a virtio sound card, played on the
 # host's audio output. Headless runs make no sound. QEMU's coreaudio backend is playback-only, so on
 # macOS the card has no mic (streams=1: output only) rather than one that records silence.
+# Headless: wav into /dev/null, not `none`, which paces playback so unevenly that always-open streams
+# (the keyboard's key-tap sound) underrun many times a second.
 if [[ -n $HEADLESS ]]; then
-    AUDIO=(-audiodev none,id=snd0 -device virtio-sound-pci,audiodev=snd0)
+    AUDIO=(-audiodev wav,id=snd0,path=/dev/null -device virtio-sound-pci,audiodev=snd0)
 elif [[ "$(uname -s)" == Darwin ]]; then
     AUDIO=(-audiodev coreaudio,id=snd0 -device virtio-sound-pci,audiodev=snd0,streams=1)
 else

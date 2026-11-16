@@ -222,19 +222,22 @@ MECHANIX_LOCKSCREEN_PIN=1234   # 4-digit lock screen PIN; unset means tap to unl
 
 ## How it works
 
-mechumu doesn't fork Mecha's code. [`build/build.sh`](build/build.sh) pins five
+mechumu doesn't fork Mecha's code. [`build/build.sh`](build/build.sh) pins four
 upstream repositories to exact commits and applies the small patches in
 [`patches/`](patches):
 
 | Upstream | What the patch adds | Status |
 |---|---|---|
-| [mecha-make](https://github.com/mecha-org/mecha-make) (the OS image build) | A `virt` mkosi profile: the Comet image for QEMU, plus the hardware simulators and app-only mode | To be proposed upstream |
-| [mechanix-comp](https://github.com/mecha-org/mechanix-comp) (the compositor) | `MECHANIX_ALLOW_SOFTWARE_EGL`: allow software rendering, the only option without host GL | To be proposed upstream |
-| [mecha-wayland](https://github.com/mecha-org/mecha-wayland) (the UI toolkit) | `MECHA_GLES_DEVICE`: render through a primary DRM node, which virtio-gpu without 3D needs | To be proposed upstream |
-| [mechanix-keyboard](https://github.com/mecha-org/mechanix-keyboard) (the on-screen keyboard) | Build against the patched toolkit | Build-time only |
-| [mechanix-gui](https://github.com/mecha-org/mechanix-gui) (the extension service) | `MECHANIX_EXTENSIONS_I2C_BUS`: which I2C bus the detector polls | To be proposed upstream |
+| [mecha-make](https://github.com/mecha-org/mecha-make) (the OS image build) | A `virt` mkosi profile: the Comet image for QEMU, plus the hardware simulators and app-only mode | Proposed in [mecha-make#145](https://github.com/mecha-org/mecha-make/issues/145) |
+| [mechanix-gui](https://github.com/mecha-org/mechanix-gui) (the extension service) | `MECHANIX_EXTENSIONS_I2C_BUS`: which I2C bus the detector polls | In review: [mechanix-gui#665](https://github.com/mecha-org/mechanix-gui/pull/665) |
 
-The build compiles the patched compositor and keyboard and Mecha's extension
+The compositor ([mechanix-comp](https://github.com/mecha-org/mechanix-comp)) and the on-screen
+keyboard ([mechanix-keyboard](https://github.com/mecha-org/mechanix-keyboard)) build unpatched:
+their emulator opt-ins, `MECHANIX_ALLOW_SOFTWARE_EGL` ([mechanix-comp#27](https://github.com/mecha-org/mechanix-comp/pull/27))
+and `MECHA_GLES_DEVICE` in the UI toolkit ([mecha-wayland#78](https://github.com/mecha-org/mecha-wayland/pull/78)),
+are upstream. The keyboard's lockfile is moved to the mecha-wayland `dev` commit that has the latter.
+
+The build compiles the compositor, the keyboard and Mecha's extension
 service, places them in the image's overlay with mechumu's own guest side
 ([`guest/`](guest)), and runs mkosi with the `virt` profile. That produces a
 compressed qcow2 for `mechumu run` and extracts the kernel, initrd and EVK

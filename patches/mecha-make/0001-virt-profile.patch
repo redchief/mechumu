@@ -200,9 +200,9 @@ index 0000000..8cf90d3
 +# The Comet session (greetd -> mechanix-session) and its UI configs, without
 +# Comet's USB-gadget/backlight services. Device names are fixed up in mkosi.postinst.chroot.
 +# mkosi.extra.virt is filled by mechumu: its guest/ overlay, plus mechanix-compositor and
-+# mechanix-keyboard built from pinned upstream commits with two opt-in patches
++# mechanix-keyboard built from upstream commits newer than the RPMs, which have the opt-ins
 +# (MECHANIX_ALLOW_SOFTWARE_EGL, MECHA_GLES_DEVICE) that QEMU without host GL needs.
-+# shortcut: patched binaries overlay the RPMs'; drop them once upstream ships both patches.
++# shortcut: built binaries overlay the RPMs'; drop them once the RPMs carry both opt-ins.
 +ExtraTrees=mkosi.extra.comet/etc/greetd:/etc/greetd
 +           mkosi.extra.comet/etc/skel:/etc/skel
 +           mkosi.extra.comet/usr/bin:/usr/bin
