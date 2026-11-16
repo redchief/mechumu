@@ -1,0 +1,22 @@
+#!/bin/sh
+# The Virtual Comet's Bluetooth (comet-bt-peers.service): of btvirt's three controllers, hci0 is the
+# Comet's own adapter and hci1, hci2 play devices in range, named and discoverable. Names go through
+# bluetoothd (the adapter's stored alias), which would otherwise name every adapter after the host.
+set -eu
+set_() {  # set_ <hciN> <property> <type> <value>
+    busctl set-property org.bluez "/org/bluez/$1" org.bluez.Adapter1 "$2" "$3" "$4"
+}
+for hci in hci0 hci1 hci2; do  # bluetoothd registers them a moment after it starts
+    for _ in $(seq 100); do busctl introspect org.bluez "/org/bluez/$hci" >/dev/null 2>&1 && break; sleep 0.1; done
+done
+peer() {  # peer <hciN> <name>
+    set_ "$1" Alias s "$2"
+    set_ "$1" Powered b true
+    set_ "$1" Pairable b true
+    set_ "$1" DiscoverableTimeout u 0
+    set_ "$1" Discoverable b true
+}
+peer hci1 "Comet Buds"
+peer hci2 "Mecha Speaker"
+set_ hci0 Alias s "$(hostname)"
+set_ hci0 Powered b true

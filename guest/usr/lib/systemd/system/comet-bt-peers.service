@@ -1,0 +1,13 @@
+[Unit]
+Description=Virtual Comet: Bluetooth devices in range
+Requires=comet-bt-sim.service
+After=comet-bt-sim.service bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/comet-bt-peers
+
+[Install]
+WantedBy=multi-user.target

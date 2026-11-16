@@ -4,3 +4,5 @@ enable comet-simd.service
 enable comet-app.service
 enable mechanix-extension-service.service
 enable comet-wifi-sim.service
+enable comet-bt-sim.service
+enable comet-bt-peers.service

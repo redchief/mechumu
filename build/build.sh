@@ -27,6 +27,7 @@ MECHA_WAYLAND_DEV=ea8b565b345a5277b40e1064df6dff7f4253c972
 echo "==> Build dependencies"
 dnf -y -q install --setopt=install_weak_deps=False --setopt=keepcache=True --setopt=cachedir="$CACHE/dnf" \
     mkosi distribution-gpg-keys fedora-repos systemd systemd-repart git python3 util-linux e2fsprogs dosfstools squashfs-tools xz tar qemu-img \
+    dnf-plugins-core cpio xz make diffutils glib2-devel dbus-devel \
     cargo rust gcc pkgconf-pkg-config libseat-devel libinput-devel systemd-devel libxkbcommon-devel \
     wayland-devel alsa-lib-devel pulseaudio-libs-devel pam-devel mesa-libgbm-devel libdrm-devel mesa-libEGL-devel
 
@@ -73,6 +74,21 @@ cargo build --release -p mechanix-extension-service --manifest-path "$EXT/Cargo.
 install -D -m 0755 "$CACHE/target/mechanix-comp/release/compositor" "$OVERLAY/mechanix-compositor"
 install -D -m 0755 "$CACHE/target/mechanix-keyboard/release/mechanix-keyboard" "$OVERLAY/mechanix-keyboard"
 install -D -m 0755 "$CACHE/target/mechanix-launcher/release/launcher" "$OVERLAY/mechanix-launcher"
+
+echo "==> Bluetooth emulator"
+# btvirt (BlueZ's controller emulator) plays the Comet's Bluetooth controller and devices in range;
+# Fedora doesn't package it, so it's built from Fedora's own signed BlueZ source package.
+BT=$SRC/bluez
+rm -rf "$BT" && mkdir -p "$BT" && cd "$BT"
+dnf -q download --source --setopt=cachedir="$CACHE/dnf" bluez
+rpm -K bluez-*.src.rpm | grep -q 'signatures OK' || { echo "build.sh: bluez source package signature check failed" >&2; exit 1; }
+rpm2cpio bluez-*.src.rpm | cpio -idm --quiet
+tar xf bluez-*.tar.xz && cd bluez-*/
+./configure -q --enable-testing --disable-systemd --disable-udev --disable-cups --disable-obex --disable-client \
+    --disable-manpages --disable-tools --disable-monitor >/dev/null
+make -s -j"$(nproc)" emulator/btvirt
+install -D -m 0755 emulator/btvirt "$SRC/mecha-make/mkosi.extra.virt/usr/libexec/btvirt"
+cd "$HERE"
 # Its lock screen's PAM services (PIN, password); the PIN file comes from MECHANIX_LOCKSCREEN_PIN below.
 install -D -m 0644 -t "$SRC/mecha-make/mkosi.extra.virt/etc/pam.d" "$SRC/mechanix-launcher/crates/lockscreen/resources/pam.d/"*
 install -D -m 0755 "$CACHE/target/mechanix-gui/release/mechanix-extension-service" "$OVERLAY/mechanix-extension-service"

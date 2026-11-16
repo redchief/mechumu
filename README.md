@@ -128,6 +128,7 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Magnetometer (LIS2MDL) | IIO device `lis2mdl` | `in_magn_*_raw` |
 | Audio (MAX98090: speaker, headphones, mic) | An HDA sound card, PipeWire's default output (and input, on Linux hosts); plays on your computer's speakers (silent with `--headless`) | Any PipeWire, PulseAudio or ALSA app |
 | Wi-Fi | A simulated radio, `wlan0`, for NetworkManager, with two networks in range: "Mecha Lab" (WPA2, password `mechumu-wifi`) and "Comet Guest" (open). They hand out addresses but don't lead to the internet; the Virtual Comet's own network stays on its Ethernet | The launcher's Wi-Fi settings, `nmcli`, NetworkManager's D-Bus API |
+| Bluetooth | A controller for BlueZ (`hci0`, BlueZ's `btvirt` emulator), with two devices in range to discover: "Comet Buds" and "Mecha Speaker" | The launcher's Bluetooth controls, `bluetoothctl`, BlueZ's D-Bus API |
 | Panel backlight | `/sys/class/backlight/32e60000.dsi.0`, the Comet's name for it, at 70% after boot; the device frame dims its screen to match | `mechanix-system-service` (`org.mechanix.services.Display`), the launcher's brightness slider, `mechumu ctl brightness` |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
@@ -350,7 +351,7 @@ The `virt` profile differs from the device image in a few places:
 - **Home button:** pressed, it reaches the guest as `KEY_HOME`, but Mecha's launcher doesn't act on it yet (it takes only the power and volume keys); swipe up from the bottom edge for the app drawer.
 - **Device frame:** a mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
 - **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `HDA Intel`, not `max98090-audio` (HDA rather than virtio sound because QEMU can't snapshot virtio sound, which Quick Boot needs). On macOS and with `--headless`, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
-- **Bluetooth:** not simulated: a virtual controller needs a userspace emulator answering its HCI commands (BlueZ's `btvirt`), which Fedora doesn't ship. The launcher's Bluetooth controls find no adapter.
+- **Bluetooth:** the devices in range can be discovered, not paired: they're emulated controllers under the same bluetoothd, so the device's side of pairing waits on the same agent as the Comet's, where a real device would answer it itself. `btvirt` is built from Fedora's BlueZ source package, since Fedora doesn't ship it.
 - **Wi-Fi:** the two networks are always in range at full signal; there's no roaming, and joining one gives no internet (the Ethernet keeps that).
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
 - **EVK peripherals:** the model doesn't include the board's PMIC and I2C expanders, so their drivers log probe errors.

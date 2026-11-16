@@ -1,0 +1,13 @@
+[Unit]
+Description=Virtual Comet: Bluetooth controllers (BlueZ's btvirt on hci_vhci)
+After=systemd-modules-load.service
+# bluetoothd skips itself when no controller exists yet.
+Before=bluetooth.service
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/btvirt -l3
+ExecStartPost=/bin/sh -c 'for i in $(seq 100); do [ -e /sys/class/bluetooth/hci2 ] && exit 0; sleep 0.1; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target
