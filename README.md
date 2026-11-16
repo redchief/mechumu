@@ -7,10 +7,13 @@ Comet's hardware buttons, battery and onboard sensors (IMU, light sensor,
 magnetometer), and its 40-pin extension connector (USB, I2C, GPIO, ADC, UART and CAN): snap on the Keyboard, Gamepad or IO Breakout
 extension, or one you're designing, without a device.
 
-<p>
-  <img src="docs/home.png" width="270" alt="The Mechanix app drawer running in mechumu">
-  <img src="docs/battery.png" width="270" alt="Settings showing a simulated battery at 42%, charging">
-  <img src="docs/app-mode.png" width="270" alt="App-only mode: the Clock app filling the screen">
+<p align="center">
+  <img src="docs/images/frame-keyboard.png" width="620" alt="The device frame: a drawing of the Comet with the Keyboard extension attached, Mecha's app drawer on its screen, and panels for the screen, extensions, battery and sensors beside it">
+</p>
+
+<p align="center">
+  <img src="docs/images/lock-screen-gamepad.png" width="270" alt="The Comet's lock screen asking for a PIN, with the Gamepad extension attached">
+  <img src="docs/images/clock-io-breakout.png" width="270" alt="The Clock app open, with the IO Breakout extension attached">
 </p>
 
 It has two modes:
@@ -227,10 +230,12 @@ One runs at a time, since they share the localhost ports.
 ./mechumu run --app org.mechanix.clock
 ```
 
+<img src="docs/app-mode.png" width="270" alt="App-only mode: the Clock app filling the screen">
+
 This boots straight into one app, full screen, without the status bar or
 launcher. `--app` takes a desktop file ID from `/usr/share/applications`, or any
 command. To try your own aarch64 build, copy it in with
-`scp -P 2222 -r build/ root@localhost:/opt/myapp`, then boot with
+`./mechumu push build/myapp` (to `/opt/myapp`), then boot with
 `--app /opt/myapp/my_app`.
 
 ### i.MX8MP EVK mode
@@ -339,6 +344,7 @@ The `virt` profile differs from the device image in a few places:
 - **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM, I2S and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S runs at one format, 48 kHz 16-bit stereo, and the sound card is a USB audio device rather than an SAI-and-codec card, so ALSA names it `Comet SAI2` instead of after the extension's codec.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
+- **Home button:** pressed, it reaches the guest as `KEY_HOME`, but Mecha's launcher doesn't act on it yet (it takes only the power and volume keys); swipe up from the bottom edge for the app drawer.
 - **Device frame:** a mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
 - **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `HDA Intel`, not `max98090-audio` (HDA rather than virtio sound because QEMU can't snapshot virtio sound, which Quick Boot needs). On macOS and with `--headless`, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
