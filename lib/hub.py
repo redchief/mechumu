@@ -327,7 +327,8 @@ def main():
     frame = http.server.ThreadingHTTPServer(("127.0.0.1", FRAME_PORT), Frame)
     threading.Thread(target=frame.serve_forever, daemon=True).start()
     # `mechumu run` execs QEMU in our parent's process; when QEMU exits we're reparented: stop too.
-    parent = os.getppid()
+    # Its pid comes from run-virt.sh: a QEMU that dies at once may be gone before we could ask.
+    parent = int(os.environ.get("MECHUMU_QEMU_PID", os.getppid()))
     while os.getppid() == parent:
         time.sleep(1)
     os.unlink("hub.sock")

@@ -47,8 +47,6 @@ esac
 # The Comet panel's 1080x1240. Homebrew qemu has no virgl, so on macOS the guest renders with
 # Mesa llvmpipe; on Linux, virgl gives the guest host GL.
 # shortcut: macOS cocoa sends mouse, not touch, events; touch only works through the gtk UI on Linux.
-# Headless: wav into /dev/null, not `none`, which paces playback so unevenly that always-open streams
-# (the keyboard's key-tap sound) underrun many times a second.
 if [[ -n $HEADLESS ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none)
 elif [[ -n $FRAME ]]; then
@@ -87,7 +85,7 @@ done
 
 # The extension connector (`mechumu ext`): USB/IP for the connector's USB, I2C, GPIO and ADC pins,
 # and the other ends of UART1/UART2 above. It exits when QEMU, which takes over this process, does.
-python3 "$LIB/hub.py" >hub.log 2>&1 &
+MECHUMU_QEMU_PID=$$ python3 "$LIB/hub.py" >hub.log 2>&1 &  # $$ becomes QEMU at the exec below
 if [[ -n $FRAME ]]; then
     url=http://127.0.0.1:8090/
     echo "mechumu: the device frame is at $url"
