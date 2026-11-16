@@ -18,12 +18,15 @@
   mechumu ctl sensors                    # what the sensors currently sense
   mechumu ctl iio                        # the IIO devices the guest sees
   mechumu ctl sound                      # the sound cards the guest sees
+  mechumu ctl tap 540 620                # touch the screen at x, y (pixels of the 1080x1240 panel)
+  mechumu ctl swipe 540 1100 540 300     # drag a finger from one point to another (optional: ms, default 300)
+  mechumu ctl screenshot [file.png]      # save the screen (default: comet-<date>-<time>.png here)
 
 Sends one line to the hub (lib/hub.py), which passes it over the VM's control port to comet-simd
 in the guest, and prints the one-line reply; exits 0 if it starts with "ok". With --hub
 (`mechumu ext`), the hub's own extension connector handles the line instead.
 """
-import os, socket, sys
+import os, socket, sys, time
 
 
 def ask(path, line, timeout=10):
@@ -44,6 +47,8 @@ def main(argv):
     name = "mechumu ext" if hub else "mechumu ctl"
     if hub and args[0] == "attach" and len(args) == 2 and args[1].endswith(".py"):
         args = ["attach", os.path.abspath(args[1])]  # the hub runs in MECHUMU_OUT
+    if not hub and args[0] == "screenshot":
+        args = ["screenshot", os.path.abspath(args[1] if len(args) > 1 else time.strftime("comet-%Y%m%d-%H%M%S.png"))]
     os.chdir(os.environ["MECHUMU_OUT"])  # relative socket paths: macOS caps them at 104 bytes
     try:
         reply = ask("hub.sock", ("" if hub else "ctl ") + " ".join(args), 30)

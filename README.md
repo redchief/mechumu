@@ -40,7 +40,8 @@ git clone https://github.com/redchief/mechumu.git && cd mechumu
 The Comet's screen opens in a window and the serial console runs in your
 terminal. For the whole device, run `./mechumu run --frame` instead: the screen
 opens in your browser inside a drawing of the Comet, with working buttons and
-an extension bay (see [Extensions](#extensions)). The UI is up about 20 seconds after launch on an M-series Mac. To quit,
+an extension bay (see [Extensions](#extensions)). There the screen is a
+touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe. The UI is up about 20 seconds after launch on an M-series Mac. To quit,
 press Ctrl-A then X in the terminal. Anything you change inside the Virtual
 Comet is kept in `out/mechanix-os-virt.qcow2`; rebuild for a clean device.
 
@@ -79,6 +80,9 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 ./mechumu ctl light 500                # ambient light in lux
 ./mechumu ctl tilt 90 0                # pitch and roll in degrees: 90 0 is upright, 0 0 flat
 ./mechumu ctl heading 90               # compass heading: facing east
+./mechumu ctl tap 540 620              # touch the screen at x, y (pixels of the 1080x1240 panel)
+./mechumu ctl swipe 540 1100 540 300   # drag a finger across it (optional: duration in ms)
+./mechumu ctl screenshot shot.png      # save the screen
 ```
 
 | Comet hardware | Inside the Virtual Comet | Read it with |
@@ -197,8 +201,9 @@ when it exits.
 | Linux or macOS x86-64 | Works, but slowly (full CPU emulation) | Works, but boots in minutes |
 | Windows | Not supported (the launcher is a bash script; WSL2 may work) | |
 
-On macOS the window sends mouse events, not touch; touch input works through
-QEMU's GTK display on Linux.
+On macOS QEMU's window sends mouse events, not touch. For touch, use the device
+frame (`--frame`) or `mechumu ctl tap` / `swipe`; on Linux, QEMU's GTK window
+passes touchscreen input through too.
 
 ## Building from source
 
@@ -280,7 +285,7 @@ The `virt` profile differs from the device image in a few places:
 - **Connector pins:** USB, I2C, SPI, GPIO, ADC, PWM, I2S and the UARTs reach the model; CAN is a guest-side `can0`. SPI is one spidev device, so a kernel SPI driver can't bind to an extension's chip the way a devicetree overlay would make it on a Comet; SPI modes and word sizes other than 8 bits aren't modelled. PWM3 and PWM4 carry settings (period, duty cycle, polarity, enable), not waveforms. I2S runs at one format, 48 kHz 16-bit stereo, and the sound card is a USB audio device rather than an SAI-and-codec card, so ALSA names it `Comet SAI2` instead of after the extension's codec.
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
-- **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. Through VNC the screen gets mouse events, not multi-touch.
+- **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. A mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
 - **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `VirtIO SoundCard`, not `max98090-audio`. On macOS, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
 - **EVK peripherals:** the model doesn't include the board's PMIC and I2C expanders, so their drivers log probe errors.

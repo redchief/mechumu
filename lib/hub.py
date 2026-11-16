@@ -13,7 +13,7 @@ an always-present DLN-2 adapter carrying the connector's I2C, GPIO and ADC pins 
 comet-simd in the guest does the importing when told to over the control port. UART1 and UART2 are
 QEMU PCI serial ports whose other ends (uart1.sock, uart2.sock) the hub holds for the model.
 """
-import base64, hashlib, http.server, importlib.util, os, socket, struct, sys, threading, time
+import base64, hashlib, http.server, importlib.util, json, os, socket, struct, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -22,6 +22,84 @@ import connector, sensors
 USBIP_PORT = 3240
 FRAME_PORT = 8090
 EXTENSIONS = os.path.join(os.path.dirname(HERE), "extensions")
+
+
+class Qmp:
+    """QEMU's QMP socket (qmp.sock, made by run-virt.sh): one connection, one command at a time."""
+    def __init__(self):
+        self.lock, self.file = threading.RLock(), None
+
+    def __call__(self, command, **arguments):
+        with self.lock:
+            for retry in (True, False):
+                try:
+                    if self.file is None:
+                        sock = socket.socket(socket.AF_UNIX)
+                        sock.settimeout(10)
+                        sock.connect("qmp.sock")
+                        self.file = sock.makefile("rw")
+                        self.file.readline()  # the greeting
+                        self.send({"execute": "qmp_capabilities"})
+                    return self.send({"execute": command, "arguments": arguments})
+                except (OSError, ValueError):  # QEMU restarted, or the line was cut short
+                    self.file = None
+                    if not retry:
+                        raise OSError("QEMU's QMP socket isn't answering; is 'mechumu run' running?")
+
+    def send(self, msg):
+        self.file.write(json.dumps(msg) + "\n")
+        self.file.flush()
+        while True:
+            reply = json.loads(self.file.readline())  # raises ValueError at EOF
+            if "error" in reply:
+                raise RuntimeError(reply["error"]["desc"])
+            if "return" in reply:  # anything else is an asynchronous event
+                return reply["return"]
+
+
+class Touch:
+    """The touchscreen (virtio-multitouch): fingers in slots, positions as fractions of the screen."""
+    MAX = 0x7FFF  # the device's axis range
+
+    def __init__(self, qmp):
+        self.qmp, self.ids, self.next_id = qmp, {}, 0
+
+    def __call__(self, kind, slot, x=0.0, y=0.0):
+        """kind: down, move or up."""
+        with self.qmp.lock:
+            if kind == "down":
+                self.ids[slot], self.next_id = self.next_id, self.next_id + 1
+            if slot not in self.ids:
+                return  # a move or up without its down
+            tid = -1 if kind == "up" else self.ids[slot]  # QEMU passes it through; -1 lifts the finger
+            if kind == "up":
+                del self.ids[slot]
+            def mtt(typ, axis="x", value=0):
+                return {"type": "mtt", "data": {"type": typ, "slot": slot, "tracking-id": tid, "axis": axis, "value": value}}
+            events = [mtt({"down": "begin", "move": "update", "up": "end"}[kind])]
+            if kind != "up":
+                events += [mtt("data", axis, round(min(max(v, 0.0), 1.0) * self.MAX)) for axis, v in (("x", x), ("y", y))]
+            self.qmp("input-send-event", events=events)
+
+    def gesture(self, cmd, args):
+        """`ctl tap <x> <y>` and `ctl swipe <x1> <y1> <x2> <y2> [ms]`, in panel pixels (1080x1240)."""
+        n = list(map(float, args))
+        if cmd == "tap" and len(n) == 2:
+            x, y = n[0] / 1080, n[1] / 1240
+            self("down", 9, x, y)
+            time.sleep(0.05)
+            self("up", 9)
+            return f"ok tapped {n[0]:g},{n[1]:g}"
+        if cmd == "swipe" and len(n) in (4, 5):
+            steps = max(2, round((n[4] if len(n) == 5 else 300) / 16))
+            self("down", 9, n[0] / 1080, n[1] / 1240)
+            for i in range(1, steps + 1):
+                time.sleep(0.016)
+                f = i / steps
+                self("move", 9, (n[0] + (n[2] - n[0]) * f) / 1080, (n[1] + (n[3] - n[1]) * f) / 1240)
+            self("up", 9)
+            return f"ok swiped {n[0]:g},{n[1]:g} -> {n[2]:g},{n[3]:g}"
+        raise ValueError("usage: tap <x> <y> | swipe <x1> <y1> <x2> <y2> [ms], in pixels of the 1080x1240 screen")
 
 
 class Hub:
@@ -33,6 +111,8 @@ class Hub:
         self.uarts = {1: None, 2: None}
         self.lock = threading.Lock()
         self.port, self.port_lock, self.seq = None, threading.Lock(), 0
+        self.qmp = Qmp()
+        self.touch = Touch(self.qmp)
 
     def lookup(self, busid):
         i2s = self.i2s if self.ext and self.ext.i2s else None  # its sound card only with an I2S extension
@@ -204,10 +284,15 @@ class Hub:
             try:
                 if cmd in ("gpio", "adc", "pwm", "i2s"):
                     return self.pins(cmd, args)
+                if cmd in ("tap", "swipe"):
+                    return self.touch.gesture(cmd, args)
+                if cmd == "screenshot" and len(args) == 1 and args[0].endswith(".png"):
+                    self.qmp("screendump", filename=args[0], format="png")
+                    return f"ok saved {args[0]}"
                 if cmd in ("light", "tilt", "accel", "gyro", "heading", "sensors"):
                     return self.sensors.ctl(cmd, args) or ("error usage: light <lux> | tilt <pitch> <roll> | "
                                                           "accel|gyro <x> <y> <z> | heading <degrees> | sensors")
-            except ValueError as e:
+            except (ValueError, OSError, RuntimeError) as e:
                 return f"error {e}"
         if line.startswith("ctl "):  # the rest of `mechumu ctl`: straight through to comet-simd
             return self.guest_raw(line[4:])
@@ -244,10 +329,10 @@ class Frame(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/vnc" and self.headers.get("Upgrade", "").lower() == "websocket":
+        elif self.path in ("/vnc", "/touch") and self.headers.get("Upgrade", "").lower() == "websocket":
             if self.headers.get("Origin") != f"http://127.0.0.1:{FRAME_PORT}":
                 return self.send_error(403)
-            self.websocket_vnc()
+            self.websocket_vnc() if self.path == "/vnc" else self.websocket_touch()
         else:
             self.send_error(404)
 
@@ -262,8 +347,8 @@ class Frame(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def websocket_vnc(self):
-        """RFC 6455, just enough for noVNC: binary frames both ways, to QEMU's VNC socket."""
+    def handshake(self):
+        """RFC 6455, just enough for the frame page."""
         key = self.headers["Sec-WebSocket-Key"].encode() + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
@@ -271,6 +356,30 @@ class Frame(http.server.BaseHTTPRequestHandler):
         self.send_header("Sec-WebSocket-Accept", base64.b64encode(hashlib.sha1(key).digest()).decode())
         self.end_headers()
         self.wfile.flush()
+
+    def messages(self):
+        """The browser's data frames' payloads, until it closes; answers pings."""
+        read = self.rfile.read
+        try:
+            while True:
+                b0, b1 = read(2)
+                n = b1 & 0x7F
+                n = struct.unpack(">H", read(2))[0] if n == 126 else struct.unpack(">Q", read(8))[0] if n == 127 else n
+                mask = read(4) if b1 & 0x80 else b"\0\0\0\0"
+                payload = bytes(c ^ mask[i % 4] for i, c in enumerate(read(n)))
+                op = b0 & 0x0F
+                if op == 8:  # close
+                    return
+                if op == 9:  # ping -> pong
+                    self.connection.sendall(bytes([0x8A, len(payload)]) + payload)
+                elif op in (0, 1, 2):
+                    yield payload
+        except (OSError, ValueError):
+            return
+
+    def websocket_vnc(self):
+        """Binary frames both ways, to QEMU's VNC socket (for noVNC)."""
+        self.handshake()
         vnc = socket.socket(socket.AF_UNIX)
         try:
             vnc.connect("vnc.sock")
@@ -290,25 +399,30 @@ class Frame(http.server.BaseHTTPRequestHandler):
             client.close()
 
         threading.Thread(target=to_browser, daemon=True).start()
-        read = self.rfile.read
         try:
-            while True:
-                b0, b1 = read(2)
-                n = b1 & 0x7F
-                n = struct.unpack(">H", read(2))[0] if n == 126 else struct.unpack(">Q", read(8))[0] if n == 127 else n
-                mask = read(4) if b1 & 0x80 else b"\0\0\0\0"
-                payload = bytes(c ^ mask[i % 4] for i, c in enumerate(read(n)))
-                op = b0 & 0x0F
-                if op == 8:  # close
-                    break
-                if op == 9:  # ping -> pong
-                    client.sendall(bytes([0x8A, len(payload)]) + payload)
-                elif op in (0, 2):
-                    vnc.sendall(payload)
-        except (OSError, ValueError):
+            for payload in self.messages():
+                vnc.sendall(payload)
+        except OSError:
             pass
         vnc.close()
 
+    def websocket_touch(self):
+        """Touches from the page, one per message: "down|move|up <slot> <x> <y>", x and y in 0-1."""
+        self.handshake()
+        held = set()
+        for payload in self.messages():
+            try:
+                kind, slot, *xy = payload.decode().split()
+                if kind in ("down", "move", "up") and 0 <= int(slot) < 8:
+                    self.hub.touch(kind, int(slot), *map(float, xy[:2]))
+                    (held.add if kind != "up" else held.discard)(int(slot))
+            except (ValueError, OSError, RuntimeError):
+                pass  # a malformed message, or QEMU gone: drop it
+        for slot in held:  # the page went away mid-touch: lift its fingers
+            try:
+                self.hub.touch("up", slot)
+            except (OSError, RuntimeError):
+                pass
 
 def main():
     os.chdir(os.environ["MECHUMU_OUT"])

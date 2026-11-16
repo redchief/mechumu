@@ -46,7 +46,8 @@ esac
 
 # The Comet panel's 1080x1240. Homebrew qemu has no virgl, so on macOS the guest renders with
 # Mesa llvmpipe; on Linux, virgl gives the guest host GL.
-# shortcut: macOS cocoa sends mouse, not touch, events; touch only works through the gtk UI on Linux.
+# shortcut: macOS cocoa sends mouse, not touch, events; touch comes from the frame (--frame) and
+# `mechumu ctl tap/swipe`, both through QMP, or from the gtk UI on Linux.
 if [[ -n $HEADLESS ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none)
 elif [[ -n $FRAME ]]; then
@@ -110,6 +111,7 @@ exec qemu-system-aarch64 \
     "${AUDIO[@]}" \
     -device virtio-tablet-pci \
     -device virtio-multitouch-pci \
+    -qmp unix:qmp.sock,server=on,wait=off \
     -device virtio-keyboard-pci \
     -device virtio-serial-pci \
     -chardev socket,id=cometctl,path=comet-ctl.sock,server=on,wait=off \

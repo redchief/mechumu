@@ -19,7 +19,7 @@
             background: linear-gradient(180deg, #4a4a4d, var(--body) 40%); box-shadow: 0 1px 0 #5a5a5e inset, 0 24px 48px rgba(0,0,0,.5); }
   .screen { aspect-ratio: 1080 / 1240; background: #000; border-radius: 18px; overflow: hidden; position: relative;
             border: 9px solid #0b0b0c; box-shadow: 0 0 0 1px #000; }
-  #vnc { position: absolute; inset: 0; }
+  #vnc { position: absolute; inset: 0; touch-action: none; }
   .screen .hint { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px; }
   .hw { position: absolute; background: #333336; border: 0; border-radius: 3px; cursor: pointer; padding: 0; }
   .hw:hover { background: var(--accent); }
@@ -137,6 +137,10 @@
 
   <div class="panel">
     <section>
+      <h2>Screen</h2>
+      <p class="note" style="margin:0">A touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe.</p>
+    </section>
+    <section>
       <h2>Extension</h2>
       <div class="choices" id="choices">
         <button data-ext="">None</button>
@@ -204,10 +208,52 @@ function connect() {
   const rfb = new RFB($("#vnc"), `ws://${location.host}/vnc`);
   rfb.scaleViewport = true;
   rfb.focusOnClick = false;  // the Comet has no keyboard of its own: keys go to the keyboard extension
+  rfb.viewOnly = true;  // and no mouse: the screen takes touches (below)
   rfb.addEventListener("connect", () => { $("#hint").hidden = true; });
   rfb.addEventListener("disconnect", () => { $("#hint").hidden = false; $("#hint").textContent = "Screen disconnected; retrying…"; setTimeout(connect, 2000); });
 }
 connect();
+
+// --- touch: the screen is a touchscreen, as on the Comet ----------------------------------------
+// A click-drag is one finger; Ctrl-drag is a pinch, the second finger mirrored about the screen's
+// centre (as in Android's emulator); the wheel swipes; a real touchscreen's fingers each get a slot.
+let touchWs;
+(function touchSocket() { touchWs = new WebSocket(`ws://${location.host}/touch`); touchWs.onclose = () => setTimeout(touchSocket, 2000); })();
+const touch = (m) => touchWs.readyState === 1 && touchWs.send(m);
+const screenEl = $("#vnc");
+const fingers = new Map();  // pointerId -> its slots
+const where = (e) => { const r = ($("canvas", screenEl) || screenEl).getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height, r]; };
+const freeSlot = () => { const used = [...fingers.values()].flat(); for (let s = 0; s < 7; s++) if (!used.includes(s)) return s; };
+const mirror = (i, x, y) => (i ? [1 - x, 1 - y] : [x, y]).join(" ");
+screenEl.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  const [x, y] = where(e), slots = [freeSlot()];
+  if (slots[0] === undefined) return;
+  screenEl.setPointerCapture(e.pointerId);
+  fingers.set(e.pointerId, slots);
+  if (e.ctrlKey && e.pointerType === "mouse") slots.push(freeSlot());
+  slots.forEach((s, i) => touch(`down ${s} ${mirror(i, x, y)}`));
+});
+screenEl.addEventListener("pointermove", (e) => {
+  const slots = fingers.get(e.pointerId);
+  if (!slots) return;
+  const [x, y] = where(e);
+  slots.forEach((s, i) => touch(`move ${s} ${mirror(i, x, y)}`));
+});
+const lift = (e) => { (fingers.get(e.pointerId) || []).forEach((s) => touch(`up ${s}`)); fingers.delete(e.pointerId); };
+screenEl.addEventListener("pointerup", lift);
+screenEl.addEventListener("pointercancel", lift);
+let wheeling = false;
+screenEl.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  if (wheeling || fingers.size) return;
+  wheeling = true;
+  const [x, y, r] = where(e), clamp = (v) => Math.max(-0.25, Math.min(0.25, v));
+  const dx = clamp(-e.deltaX / r.width), dy = clamp(-e.deltaY / r.height);
+  touch(`down 7 ${x} ${y}`);
+  for (let i = 1; i <= 4; i++) setTimeout(() => touch(`move 7 ${x + dx * i / 4} ${y + dy * i / 4}`), i * 16);
+  setTimeout(() => { touch("up 7"); wheeling = false; }, 90);
+}, { passive: false });
 
 // --- hardware buttons --------------------------------------------------------------------------
 document.querySelectorAll("[data-btn]").forEach((b) => b.addEventListener("click", () => cmd(`ctl button ${b.dataset.btn}`)));

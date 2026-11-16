@@ -38,6 +38,13 @@ expect "icm42605-accel" ctl iio
 expect "lis2mdl" ctl iio
 expect "ok tilted" ctl tilt 90 0
 expect "VirtIO SoundCard" ctl sound
+expect "ok tapped 540,620" ctl tap 540 620
+expect "ok swiped 540,900 -> 540,300" ctl swipe 540 900 540 300 100
+expect "error usage: tap" ctl tap 1
+shot="$log.png"
+expect "ok saved $shot" ctl screenshot "$shot"
+[[ $(head -c 8 "$shot" | xxd -p) == 89504e470d0a1a0a ]] || { echo "FAIL: $shot isn't a PNG"; exit 1; }
+rm -f "$shot"
 # The connector's pin bridge is always there; extensions come and go on its USB pins.
 expect "Comet extension connector" ctl usb
 expect "ok keyboard attached" ext attach keyboard
