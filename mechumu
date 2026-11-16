@@ -16,7 +16,7 @@ usage: mechumu [--device <name>] <command> [options]
         (the app in app/, built on first use with Rust; --browser: in your browser instead).
         --app boots straight into one app, e.g. --app org.mechanix.clock
   ctl battery <0-100> [charging|discharging|full] | gpio [<1-5> <0|1>] | adc <1-4> <volts>
-      | pwm [<3|4> <hz> <duty>|off] | i2s [play|record] | spi <hex> | can <id>#<hex> | button power|home|volup|voldown
+      | pwm [<3|4> <hz> <duty>|off] | i2s [play|record] | spi <hex> | can <id>#<hex> | button power|home|volup|voldown | unlock
       | light <lux> | tilt <pitch> <roll> | accel|gyro <x> <y> <z> | heading <degrees> | sensors | iio | sound
       | tap <x> <y> | swipe <x1> <y1> <x2> <y2> [ms] | screenshot [file.png]
         Drive the running Virtual Comet's battery, connector pins, CAN bus, buttons, sensors and screen.
@@ -86,20 +86,30 @@ case $cmd in
         scp -q -r -P 2222 "${SSH_OPTS[@]:2}" "$1" "root@localhost:${2:-/opt}/" && echo "pushed to ${2:-/opt}/$(basename "$1")" ;;
     launch)
         [[ $# -ge 1 ]] || { echo "usage: mechumu launch <command> [args...]" >&2; exit 2; }
-        # As the session's user, with the environment of a process already on its Wayland display.
+        # As the session's user, with the environment of a process already on its Wayland display, or
+        # else the compositor's plus its display socket (when nothing else is on screen).
         guest -t root@localhost python3 -c "$(printf '%q' '
-import os, pwd, sys
+import glob, os, pwd, sys
 user = pwd.getpwnam("mecha")
+env = fallback = None
 for pid in filter(str.isdigit, os.listdir("/proc")):
     try:
         if os.stat(f"/proc/{pid}").st_uid != user.pw_uid:
             continue
-        env = dict(kv.split("=", 1) for kv in open(f"/proc/{pid}/environ").read().split("\0") if "=" in kv)
+        e = dict(kv.split("=", 1) for kv in open(f"/proc/{pid}/environ").read().split("\0") if "=" in kv)
+        comm = open(f"/proc/{pid}/comm").read().strip()
     except OSError:
         continue
-    if "WAYLAND_DISPLAY" in env:
+    if "WAYLAND_DISPLAY" in e:
+        env = e
         break
-else:
+    if comm.startswith("mechanix-compos"):
+        fallback = e
+if env is None and fallback is not None:
+    sockets = sorted(p for p in glob.glob(f"/run/user/{user.pw_uid}/wayland-[0-9]*") if not p.endswith(".lock"))
+    if sockets:
+        env = dict(fallback, XDG_RUNTIME_DIR=f"/run/user/{user.pw_uid}", WAYLAND_DISPLAY=os.path.basename(sockets[0]))
+if env is None:
     sys.exit("mechumu launch: no graphical session yet; is the Virtual Comet still booting?")
 os.initgroups(user.pw_name, user.pw_gid)
 os.setgid(user.pw_gid)

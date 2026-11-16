@@ -64,7 +64,15 @@ cold rather than bringing back a state the disk has moved on from.
 
 ### Logging in
 
-The session logs in on its own. For a shell, `mechumu run` hands your SSH public
+The session logs in on its own, into Mecha's shell
+([mechanix-launcher](https://github.com/mecha-org/mechanix-launcher)): it starts
+at the lock screen, as a Comet does. Press the power button if the screen has
+gone dark, swipe up, and enter the PIN, **1234** unless you set your own in
+`mechumu.env`. `./mechumu ctl unlock` unlocks it from the terminal. The screen
+blanks after 30 seconds idle (10 when locked) and then only the power button
+wakes it, as on the device; the Virtual Comet doesn't suspend.
+
+For a shell, `mechumu run` hands your SSH public
 key (`~/.ssh/id_ed25519.pub`, `id_ecdsa.pub` or `id_rsa.pub`) to the guest, so:
 
 ```sh
@@ -267,28 +275,29 @@ Optional settings go in `mechumu.env` (gitignored):
 
 ```sh
 MECHA_USER_PASSWORD=...        # password for the mecha user (serial console and SSH)
-MECHANIX_LOCKSCREEN_PIN=1234   # 4-digit lock screen PIN; unset means tap to unlock
+MECHANIX_LOCKSCREEN_PIN=4321   # 4-digit lock screen PIN; unset means 1234
 ```
 
 ## How it works
 
-mechumu doesn't fork Mecha's code. [`build/build.sh`](build/build.sh) pins four
+mechumu doesn't fork Mecha's code. [`build/build.sh`](build/build.sh) pins five
 upstream repositories to exact commits and applies the small patches in
 [`patches/`](patches):
 
 | Upstream | What the patch adds | Status |
 |---|---|---|
-| [mecha-make](https://github.com/mecha-org/mecha-make) (the OS image build) | A `virt` mkosi profile: the Comet image for QEMU, plus the hardware simulators and app-only mode | Proposed in [mecha-make#145](https://github.com/mecha-org/mecha-make/issues/145) |
+| [mecha-make](https://github.com/mecha-org/mecha-make) (the OS image build) | A `virt` mkosi profile: the Comet image for QEMU, plus the hardware simulators, app-only mode and starting the launcher | Proposed in [mecha-make#145](https://github.com/mecha-org/mecha-make/issues/145) |
 | [mechanix-gui](https://github.com/mecha-org/mechanix-gui) (the extension service) | `MECHANIX_EXTENSIONS_I2C_BUS`: which I2C bus the detector polls | In review: [mechanix-gui#665](https://github.com/mecha-org/mechanix-gui/pull/665) |
 
-The compositor ([mechanix-comp](https://github.com/mecha-org/mechanix-comp)) and the on-screen
-keyboard ([mechanix-keyboard](https://github.com/mecha-org/mechanix-keyboard)) build unpatched:
+The compositor ([mechanix-comp](https://github.com/mecha-org/mechanix-comp)), the shell
+([mechanix-launcher](https://github.com/mecha-org/mechanix-launcher)) and the on-screen
+keyboard ([mechanix-keyboard](https://github.com/mecha-org/mechanix-keyboard), for app-only mode) build unpatched:
 their emulator opt-ins, `MECHANIX_ALLOW_SOFTWARE_EGL` ([mechanix-comp#27](https://github.com/mecha-org/mechanix-comp/pull/27))
 and `MECHA_GLES_DEVICE` in the UI toolkit ([mecha-wayland#78](https://github.com/mecha-org/mecha-wayland/pull/78)),
-are upstream. The keyboard's lockfile is moved to the mecha-wayland `dev` commit that has the latter.
+are upstream. The launcher's and keyboard's lockfiles are moved to the mecha-wayland `dev` commit that has the latter.
 
-The build compiles the compositor, the keyboard and Mecha's extension
-service, places them in the image's overlay with mechumu's own guest side
+The build compiles the compositor, the launcher, the keyboard and Mecha's
+extension service, places them in the image's overlay with mechumu's own guest side
 ([`guest/`](guest)), and runs mkosi with the `virt` profile. That produces a
 compressed qcow2 for `mechumu run` and extracts the kernel, initrd and EVK
 device tree for `mechumu evk`. Every other package comes from Fedora 44 and

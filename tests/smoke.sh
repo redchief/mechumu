@@ -32,6 +32,8 @@ expect "ok ADC1 at 1.65 V" ctl adc 1 1.65
 expect "ok can0 <- 123#DEADBEEF" ctl can 123#DEADBEEF
 expect "error usage: battery" ctl battery 101 charging
 expect "ok home pressed" ctl button home
+expect "mechanix-launch" shell pgrep -l mechanix-launch
+expect "ok unlocked" ctl unlock
 # The onboard sensors: set on the host, read back through the guest's own drivers.
 expect "ok light 500 lux" ctl light 500
 expect "opt3001=500lux" ctl iio

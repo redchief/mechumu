@@ -9,7 +9,8 @@ generic `virt` machine instead of the i.MX8MP board:
   simulated hardware, extension connector and app-only mode).
 - mkosi.postinst.chroot: virt session fix-ups (software EGL opt-ins, Virtual-1
   connector, gpio group).
-- mechanix-session: app-only branch, inert unless /run/mechanix-app exists.
+- mechanix-session: an app-only branch, inert unless /run/mechanix-app exists,
+  and mechanix-launcher (home, lock screen, keyboard) when it is installed.
 
 Upstream: mecha-org/mecha-make, against pre-release b226b42.
 
@@ -131,24 +132,29 @@ index 02503f9..42a6ae7 100644
  [Content]
  SkeletonTrees=mkosi.skeleton.comet-repo
 diff --git a/mkosi.extra.comet/usr/bin/mechanix-session b/mkosi.extra.comet/usr/bin/mechanix-session
-index 06f4afd..429c5ea 100755
+index 06f4afd..296e6ec 100755
 --- a/mkosi.extra.comet/usr/bin/mechanix-session
 +++ b/mkosi.extra.comet/usr/bin/mechanix-session
-@@ -17,10 +17,18 @@ done
+@@ -17,10 +17,22 @@ done
  if [ -n "$WAYLAND_DISPLAY" ]; then
      export WAYLAND_DISPLAY
  
 -    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/nwg-drawer.lock"
 -    nwg-drawer -r -k -nocats -nofs -c 3 -is 48 -spacing 12 >/tmp/nwg-drawer.log 2>&1 &
 -    waybar >/tmp/waybar.log 2>&1 &
-     mechanix-keyboard >/tmp/mechanix-keyboard.log 2>&1 &
+-    mechanix-keyboard >/tmp/mechanix-keyboard.log 2>&1 &
 +    if [ -r /run/mechanix-app ]; then
++        mechanix-keyboard >/tmp/mechanix-keyboard.log 2>&1 &
 +        # App-only mode (Virtual Comet: mechumu run --app ...): just that app, no bar or launcher.
 +        app=$(cat /run/mechanix-app)
 +        desktop=/usr/share/applications/$app.desktop
 +        [ -f "$desktop" ] && app=$(sed -n 's/^Exec=//p' "$desktop" | head -1)
 +        sh -c "$app" >/tmp/app.log 2>&1 &
++    elif [ -x /usr/bin/mechanix-launcher ]; then
++        # Mecha's shell: home screen, lock screen, status bar and its own keyboard.
++        mechanix-launcher >/tmp/mechanix-launcher.log 2>&1 &
 +    else
++        mechanix-keyboard >/tmp/mechanix-keyboard.log 2>&1 &
 +        rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/nwg-drawer.lock"
 +        nwg-drawer -r -k -nocats -nofs -c 3 -is 48 -spacing 12 >/tmp/nwg-drawer.log 2>&1 &
 +        waybar >/tmp/waybar.log 2>&1 &
@@ -180,7 +186,7 @@ index a4d3921..9e88b29 100755
      cat > /usr/share/phosh/phoc.ini <<'EOF'
 diff --git a/mkosi.profiles/virt.conf b/mkosi.profiles/virt.conf
 new file mode 100644
-index 0000000..8cf90d3
+index 0000000..9c3b2df
 --- /dev/null
 +++ b/mkosi.profiles/virt.conf
 @@ -0,0 +1,23 @@

@@ -234,6 +234,9 @@ def set_battery(percent, state):
 
 def handle(line):
     cmd, *args = line.split()
+    if cmd == "unlock" and not args:  # the lock screen, through logind (the launcher listens)
+        sh("loginctl", "unlock-sessions")
+        return "unlocked"
     if cmd == "suspend" and not args:  # Quick Boot: USB/IP connections can't survive a snapshot
         suspended.set()
         for busid in list(ports):
@@ -315,7 +318,7 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | i2s play|record | usb | iio | sound")
+    raise ValueError("commands: unlock | battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | i2s play|record | usb | iio | sound")
 
 
 def main():
