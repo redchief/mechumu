@@ -249,7 +249,7 @@ when it exits.
 
 | Host | Virtual Comet | EVK |
 |---|---|---|
-| macOS, Apple Silicon | Native speed (HVF); llvmpipe software rendering ([why, and what would change it](docs/macos-gpu.md)) | Native speed (HVF) |
+| macOS, Apple Silicon | Native speed (HVF); llvmpipe software rendering, or the GPU with a virgl-capable QEMU in `MECHUMU_QEMU` ([details](docs/macos-gpu.md)) | Native speed (HVF) |
 | Linux arm64 | Native speed (KVM); host GPU through virgl | KVM |
 | Linux or macOS x86-64 | Works, but slowly (full CPU emulation) | Works, but boots in minutes |
 | Windows | Not supported (the launcher is a bash script; WSL2 may work) | |

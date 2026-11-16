@@ -26,7 +26,9 @@ IMAGE=mechanix-os-virt.qcow2
 [[ -f $IMAGE ]] || { echo "no $PWD/$IMAGE - run 'mechumu build'" >&2; exit 1; }
 
 # UEFI firmware: Homebrew qemu ships edk2-aarch64-code.fd, Fedora/Debian ship AAVMF/QEMU_EFI.
-QEMU_SHARE=$(dirname "$(command -v qemu-system-aarch64 || echo /usr/bin/x)")/../share/qemu
+# MECHUMU_QEMU: another QEMU, e.g. one with virgl on macOS (docs/macos-gpu.md).
+QEMU=${MECHUMU_QEMU:-qemu-system-aarch64}
+QEMU_SHARE=$(dirname "$(command -v "$QEMU" || echo /usr/bin/x)")/../share/qemu
 for cand in "${EFI_CODE:-}" "$QEMU_SHARE/edk2-aarch64-code.fd" \
             /usr/share/edk2/aarch64/QEMU_EFI-pflash.raw /usr/share/AAVMF/AAVMF_CODE.fd; do
     [[ -n "$cand" && -f "$cand" ]] && { EFI_CODE=$cand; break; }
@@ -39,7 +41,7 @@ done
 # next time instead of bringing back a state its disk has moved on from. A snapshot only loads
 # into the same machine, so other settings (--frame, --headless, --app, -- args), another QEMU or
 # another version of this script boot cold too.
-CONFIG="$(uname -s) headless=$HEADLESS frame=$FRAME app=$APP args=$* $(cksum <"${BASH_SOURCE[0]}") $(qemu-system-aarch64 --version | head -1)"
+CONFIG="$(uname -s) headless=$HEADLESS frame=$FRAME app=$APP args=$* $(cksum <"${BASH_SOURCE[0]}") $(command -v "$QEMU") $("$QEMU" --version | head -1)"
 RESUME=
 if [[ -z $COLD && -f .efi-vars.qcow2 && $(cat .quickboot-config 2>/dev/null) == "$CONFIG" ]] &&
    qemu-img snapshot -l "$IMAGE" 2>/dev/null | grep -q ' quickboot '; then
@@ -70,7 +72,8 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 # The Comet panel's 1080x1240. Homebrew qemu has no virgl, so on macOS the guest renders with
-# Mesa llvmpipe; on Linux, virgl gives the guest host GL.
+# Mesa llvmpipe, unless MECHUMU_QEMU is a QEMU with virgl (GLES through ANGLE: docs/macos-gpu.md);
+# on Linux, virgl gives the guest host GL.
 # shortcut: macOS cocoa sends mouse, not touch, events; touch comes from the frame (--frame) and
 # `mechumu ctl tap/swipe`, both through QMP, or from the gtk UI on Linux.
 if [[ -n $HEADLESS ]]; then
@@ -78,6 +81,8 @@ if [[ -n $HEADLESS ]]; then
 elif [[ -n $FRAME ]]; then
     # VNC on a Unix socket only; the hub relays it to the frame page (lib/frame.html).
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display none -vnc unix:vnc.sock)
+elif [[ "$(uname -s)" == Darwin ]] && "$QEMU" -device help 2>/dev/null | grep -q '"virtio-gpu-gl-pci"'; then
+    GPU=(-device virtio-gpu-gl-pci,xres=1080,yres=1240 -display cocoa,gl=es,zoom-to-fit=on)
 elif [[ "$(uname -s)" == Darwin ]]; then
     GPU=(-device virtio-gpu-pci,xres=1080,yres=1240 -display cocoa,zoom-to-fit=on)
 else
@@ -130,7 +135,7 @@ fi
 # sensors' drivers take their configuration from it (kmod/comet-board).
 LOADVM=(-name "Virtual Comet")  # never empty: macOS bash 3.2 treats an empty array as unset under set -u
 [[ -n $RESUME ]] && LOADVM+=(-loadvm quickboot)
-exec qemu-system-aarch64 \
+exec "$QEMU" \
     -machine virt,acpi=off \
     "${LOADVM[@]}" \
     "${ACCEL[@]}" \

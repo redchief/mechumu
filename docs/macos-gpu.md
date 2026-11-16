@@ -68,16 +68,20 @@ built on it. Not a fit.
 Don't make a patched QEMU the default: it would mean depending on a fork or a
 community tap, and the stock path works.
 
-Instead, add an **opt-in** in a small follow-up change:
+Instead, mechumu has an **opt-in**:
 1. `MECHUMU_QEMU=/path/to/qemu-system-aarch64` picks the QEMU binary.
 2. When that binary offers `virtio-gpu-gl-pci` (`-device help`), the windowed
    mode on macOS uses `-device virtio-gpu-gl-pci -display cocoa,gl=es`.
 3. Nothing else changes: the two opt-ins stay set, and the guest uses the GPU when
    it gets a render node.
 
-Then anyone who installs one of those taps gets GPU rendering, while the default
-stays on stock Homebrew QEMU. Quick Boot keeps working: the run's fingerprint
-includes the QEMU version, so switching QEMU boots cold.
+The selection is tested with a stand-in QEMU. The GL path itself hasn't run yet:
+it needs one of the patched builds above.
+
+So anyone who installs one of those taps can try GPU rendering, while the
+default stays on stock Homebrew QEMU. Quick Boot keeps working: the run's
+fingerprint includes the QEMU binary and its version, so switching QEMU boots
+cold.
 
 Revisit when Odaki's QEMU patches land upstream, and switch the default on macOS
 at that point. Until then, one test is worth running: whether a tap's QEMU still
