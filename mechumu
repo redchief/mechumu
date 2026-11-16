@@ -7,7 +7,7 @@ export MECHUMU_OUT=${MECHUMU_OUT:-$HERE/out}
 
 usage() {
     cat <<'USAGE'
-usage: mechumu <command> [options]
+usage: mechumu [--device <name>] <command> [options]
 
   run [--app <desktop id|command>] [--frame [--browser] | --headless] [--cold] [-- <qemu args>]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
@@ -24,23 +24,104 @@ usage: mechumu <command> [options]
         Save the running Virtual Comet and quit (Quick Boot): the next 'mechumu run' resumes it.
   ext attach <keyboard|gamepad|io-breakout|model.py> | detach | status | <command...>
         Snap an extension onto the running Virtual Comet's connector, or drive the attached one.
+  shell [<command...>]
+        A root shell in the running Virtual Comet, or run one command there (like adb shell).
+  logs [<name>]
+        Follow the guest's journal, or one app's log (/tmp/<name>.log, else unit <name>).
+  push <file or dir> [<guest dir>]
+        Copy a build into the guest, to /opt/ by default (like adb push).
+  launch <command> [args...]
+        Run a program in the running session, as the mecha user, with the session's environment.
+  devices [rm <name>]
+        List devices (--device <name>: a separate Virtual Comet, its own disk and saved state,
+        created on first run as a copy of the default one), or delete one.
   evk [-- <qemu args>]
         Boot the same kernel and rootfs on QEMU's NXP i.MX8MP EVK model (serial only).
   build
         Build out/ from source in Docker (arm64 hosts: Apple Silicon or arm64 Linux).
 
-Images live in $MECHUMU_OUT (default: out/ next to this script).
+Images live in $MECHUMU_OUT (default: out/ next to this script); --device <name> (or $MECHUMU_DEVICE)
+uses $MECHUMU_OUT/devices/<name>. One Virtual Comet runs at a time: they share localhost ports.
 USAGE
 }
 
+# Devices: each its own copy of the image (a clone on APFS and reflinking filesystems), not a qcow2
+# overlay, since the default device keeps writing to the image an overlay would be backed by.
+DEVICE=${MECHUMU_DEVICE:-}
+if [[ ${1:-} == --device ]]; then DEVICE=${2:?--device needs a name}; shift 2; fi
+if [[ -n $DEVICE ]]; then
+    [[ $DEVICE =~ ^[A-Za-z0-9_-]+$ ]] || { echo "mechumu: device names are letters, digits, - and _" >&2; exit 2; }
+    BASE=$MECHUMU_OUT/mechanix-os-virt.qcow2
+    export MECHUMU_OUT=$MECHUMU_OUT/devices/$DEVICE
+fi
+
+# The guest over SSH (port 2222, localhost only). Its host key changes with every build and device,
+# so it isn't recorded.
+SSH_OPTS=(-p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+guest() { exec ssh "${SSH_OPTS[@]}" "$@"; }
+
 cmd=${1:-help}
 shift || true
+if [[ $cmd == run && -n $DEVICE && ! -f $MECHUMU_OUT/mechanix-os-virt.qcow2 ]]; then
+    [[ -f $BASE ]] || { echo "mechumu: no $BASE to copy - run 'mechumu build'" >&2; exit 1; }
+    qemu-img info "$BASE" >/dev/null 2>&1 || { echo "mechumu: stop the running Virtual Comet first; device $DEVICE starts as a copy of its disk" >&2; exit 1; }
+    mkdir -p "$MECHUMU_OUT"
+    echo "mechumu: new device $DEVICE, a copy of $BASE"
+    cp -c "$BASE" "$MECHUMU_OUT/" 2>/dev/null || cp --reflink=auto "$BASE" "$MECHUMU_OUT/" 2>/dev/null || cp "$BASE" "$MECHUMU_OUT/"
+    qemu-img snapshot -d quickboot "$MECHUMU_OUT/mechanix-os-virt.qcow2" 2>/dev/null || true  # the original's saved state
+fi
 case $cmd in
     run) exec bash "$HERE/lib/run-virt.sh" "$@" ;;
     evk) exec bash "$HERE/lib/run-evk.sh" "$@" ;;
     ctl) exec python3 "$HERE/lib/ctl.py" "$@" ;;
     ext) exec python3 "$HERE/lib/ctl.py" --hub "$@" ;;
     stop) exec python3 "$HERE/lib/ctl.py" --hub stop ;;
+    shell) [[ $# -gt 0 ]] && guest root@localhost "$@" || guest -t root@localhost ;;  # like adb shell: a shell line
+    logs)
+        [[ $# -le 1 && ${1:-x} =~ ^[A-Za-z0-9_.@-]+$ ]] || { echo "usage: mechumu logs [<name>]" >&2; exit 2; }
+        [[ $# -eq 0 ]] && guest -t root@localhost journalctl -f
+        guest -t root@localhost "f=/tmp/$1.log; [ -f \$f ] && exec tail -n 50 -F \$f; exec journalctl -n 50 -f -u $1" ;;
+    push)
+        [[ $# -ge 1 && $# -le 2 && -e $1 ]] || { echo "usage: mechumu push <file or dir> [<guest dir, default /opt>]" >&2; exit 2; }
+        scp -q -r -P 2222 "${SSH_OPTS[@]:2}" "$1" "root@localhost:${2:-/opt}/" && echo "pushed to ${2:-/opt}/$(basename "$1")" ;;
+    launch)
+        [[ $# -ge 1 ]] || { echo "usage: mechumu launch <command> [args...]" >&2; exit 2; }
+        # As the session's user, with the environment of a process already on its Wayland display.
+        guest -t root@localhost python3 -c "$(printf '%q' '
+import os, pwd, sys
+user = pwd.getpwnam("mecha")
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        if os.stat(f"/proc/{pid}").st_uid != user.pw_uid:
+            continue
+        env = dict(kv.split("=", 1) for kv in open(f"/proc/{pid}/environ").read().split("\0") if "=" in kv)
+    except OSError:
+        continue
+    if "WAYLAND_DISPLAY" in env:
+        break
+else:
+    sys.exit("mechumu launch: no graphical session yet; is the Virtual Comet still booting?")
+os.initgroups(user.pw_name, user.pw_gid)
+os.setgid(user.pw_gid)
+os.setuid(user.pw_uid)
+os.chdir(user.pw_dir)
+os.execvpe(sys.argv[1], sys.argv[1:], env)
+')" "$(printf '%q ' "$@")" ;;
+    devices)
+        root=${BASE:-$MECHUMU_OUT/mechanix-os-virt.qcow2}
+        root=$(dirname "$root")/devices
+        if [[ ${1:-} == rm ]]; then
+            [[ ${2:-} =~ ^[A-Za-z0-9_-]+$ && -d $root/$2 ]] || { echo "usage: mechumu devices rm <name>; see: mechumu devices" >&2; exit 2; }
+            qemu-img info "$root/$2/mechanix-os-virt.qcow2" >/dev/null 2>&1 || { echo "mechumu: device $2 is running; stop it first" >&2; exit 1; }
+            rm -rf "${root:?}/$2" && echo "deleted device $2"
+            exit
+        fi
+        echo "default  $MECHUMU_OUT"
+        for d in "$root"/*/; do
+            [[ -f $d/mechanix-os-virt.qcow2 ]] || continue
+            saved=$(qemu-img snapshot -l "$d/mechanix-os-virt.qcow2" 2>/dev/null | grep -q ' quickboot ' && echo "  (saved state)" || true)
+            echo "$(basename "$d")$saved"
+        done ;;
     build)
         command -v docker >/dev/null || { echo "mechumu build needs Docker; or run build/build.sh as root on Fedora 44 arm64" >&2; exit 1; }
         mkdir -p "$MECHUMU_OUT"

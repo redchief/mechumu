@@ -86,12 +86,10 @@ fi
 
 # Sound: the Comet's MAX98090 (speaker, headphones, mic) becomes an HDA sound card, played on the
 # host's audio output: HDA, not virtio-sound, because QEMU can't snapshot virtio-sound (Quick Boot).
-# Headless runs make no sound. QEMU's coreaudio and wav backends are playback-only, so on macOS and
-# headless the card has no mic (hda-output) rather than one that records silence.
-# Headless: wav into /dev/null, not `none`, which paces playback so unevenly that always-open streams
-# (the keyboard's key-tap sound) underrun many times a second.
+# Headless runs make no sound. QEMU's coreaudio backend is playback-only, so on macOS (and headless,
+# for the same machine) the card has no mic (hda-output) rather than one that records silence.
 if [[ -n $HEADLESS ]]; then
-    AUDIO=(-audiodev wav,id=snd0,path=/dev/null -device intel-hda -device hda-output,audiodev=snd0)
+    AUDIO=(-audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0)
 elif [[ "$(uname -s)" == Darwin ]]; then
     AUDIO=(-audiodev coreaudio,id=snd0 -device intel-hda -device hda-output,audiodev=snd0)
 else

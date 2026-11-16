@@ -40,6 +40,9 @@ expect "lis2mdl" ctl iio
 expect "ok tilted" ctl tilt 90 0
 expect "HDA Intel" ctl sound
 expect "ok tapped 540,620" ctl tap 540 620
+expect "aarch64" shell uname -m
+expect "pushed to /tmp/$(basename "$log")" push "$log" /tmp
+expect "mecha wayland-1" launch sh -c 'echo $(id -un) $WAYLAND_DISPLAY'
 expect "ok swiped 540,900 -> 540,300" ctl swipe 540 900 540 300 100
 expect "error usage: tap" ctl tap 1
 shot="$log.png"

@@ -183,6 +183,36 @@ a HID report descriptor), answers the connector's I2C and SPI transfers (`i2c_wr
 `on_uart` / `uart_send`); the guest's own drivers do the rest. [`lib/connector.py`](lib/connector.py) has the base
 classes. Errors in a model land in `out/hub.log`.
 
+### Developer tools
+
+Like `adb`, for the running Virtual Comet:
+
+```sh
+./mechumu shell                        # a root shell; or run one line: ./mechumu shell journalctl -b -p err
+./mechumu logs                         # follow the journal; ./mechumu logs mechanix-keyboard follows one app's log
+./mechumu push build/my_app            # copy a file or directory to /opt/ (or: push <path> <guest dir>)
+./mechumu launch /opt/my_app/my_app    # run it in the session, as the mecha user; Ctrl-C stops it
+```
+
+`launch` starts the program with the session's environment (its Wayland display
+and the rendering settings the Virtual Comet needs), so it appears on the screen
+like an app opened from the launcher.
+
+### Devices
+
+`--device <name>` before any command picks a separate Virtual Comet with its own
+disk and saved state, like Android's virtual devices: one for trying things, say,
+and one kept clean. A new device starts as a copy of the default one (instant on
+an APFS Mac: a clone) on its first `run`.
+
+```sh
+./mechumu --device scratch run          # created on first run
+./mechumu --device scratch ctl battery 5
+./mechumu devices                       # list them; devices rm scratch deletes one
+```
+
+One runs at a time, since they share the localhost ports.
+
 ### App-only mode
 
 ```sh
