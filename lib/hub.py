@@ -13,7 +13,7 @@ an always-present DLN-2 adapter carrying the connector's I2C, GPIO and ADC pins 
 comet-simd in the guest does the importing when told to over the control port. UART1 and UART2 are
 QEMU PCI serial ports whose other ends (uart1.sock, uart2.sock) the hub holds for the model.
 """
-import base64, hashlib, http.server, importlib.util, json, os, socket, struct, sys, threading, time
+import base64, errno, hashlib, http.server, importlib.util, json, os, socket, struct, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -224,6 +224,37 @@ class Hub:
             raise RuntimeError(reply.removeprefix("error "))
         return reply[3:]
 
+    def quickboot_save(self):
+        """`mechumu stop`: save the running device as snapshot "quickboot" and quit QEMU; the next
+        `mechumu run` resumes it (run-virt.sh). The guest drops its USB/IP buses first, since their
+        connections can't come back from a snapshot; resumed() restores them."""
+        if self.ext:
+            self.handle("detach")
+        if not (r := self.guest_raw("suspend", 20)).startswith("ok"):
+            raise RuntimeError(f"the guest couldn't let go of its buses: {r}")
+        self.qmp("stop")
+        out = self.qmp("human-monitor-command", **{"command-line": "savevm quickboot"}).strip()
+        if out:  # HMP reports failure as text
+            self.qmp("cont")
+            self.guest_raw(f"resume {time.time():.3f}", 20)
+            raise RuntimeError(f"couldn't save: {out}")
+        threading.Timer(0.5, lambda: self.qmp("quit")).start()  # after this reply goes out
+        return "saved; 'mechumu run' resumes here (or --cold to boot fresh)"
+
+    def resumed(self):
+        """After a Quick Boot: spend the snapshot, so that a run ending without `mechumu stop` boots
+        cold next time, then set the guest's clock (it stopped at the save) and reattach its buses."""
+        try:
+            self.qmp("human-monitor-command", **{"command-line": "delvm quickboot"})
+        except (OSError, RuntimeError) as e:
+            print(f"hub: couldn't delete the quickboot snapshot: {e}", flush=True)
+        for _ in range(30):
+            reply = self.guest_raw(f"resume {time.time():.3f}", 20)
+            if reply.startswith("ok"):
+                return
+            time.sleep(1)
+        print(f"hub: the guest didn't resume: {reply}", flush=True)
+
     def handle(self, line):
         cmd, *args = line.split()
         with self.lock:
@@ -297,7 +328,7 @@ class Hub:
         if line.startswith("ctl "):  # the rest of `mechumu ctl`: straight through to comet-simd
             return self.guest_raw(line[4:])
         try:
-            return "ok " + self.handle(line)
+            return "ok " + (self.quickboot_save() if line == "stop" else self.handle(line))
         except Exception as e:
             return f"error {e}"
 
@@ -424,10 +455,21 @@ class Frame(http.server.BaseHTTPRequestHandler):
             except (OSError, RuntimeError):
                 pass
 
+def bind(make):
+    """A listening socket; a hub that's just quit (its QEMU gone a moment ago) may still hold the port."""
+    for attempt in range(50):
+        try:
+            return make()
+        except OSError as e:
+            if e.errno != errno.EADDRINUSE or attempt == 49:
+                raise
+            time.sleep(0.1)
+
+
 def main():
     os.chdir(os.environ["MECHUMU_OUT"])
     hub = Hub()
-    usbip = socket.create_server(("127.0.0.1", USBIP_PORT))
+    usbip = bind(lambda: socket.create_server(("127.0.0.1", USBIP_PORT)))
     if os.path.exists("hub.sock"):
         os.unlink("hub.sock")
     control = socket.socket(socket.AF_UNIX)
@@ -437,8 +479,10 @@ def main():
         threading.Thread(target=target, args=(sock,), daemon=True).start()
     for n in (1, 2):
         threading.Thread(target=hub.serve_uart, args=(n,), daemon=True).start()
+    if os.environ.get("MECHUMU_RESUME"):
+        threading.Thread(target=hub.resumed, daemon=True).start()
     Frame.hub = hub
-    frame = http.server.ThreadingHTTPServer(("127.0.0.1", FRAME_PORT), Frame)
+    frame = bind(lambda: http.server.ThreadingHTTPServer(("127.0.0.1", FRAME_PORT), Frame))
     threading.Thread(target=frame.serve_forever, daemon=True).start()
     # `mechumu run` execs QEMU in our parent's process; when QEMU exits we're reparented: stop too.
     # Its pid comes from run-virt.sh: a QEMU that dies at once may be gone before we could ask.

@@ -45,6 +45,15 @@ touchscreen: click or drag for one finger, Ctrl-drag to pinch, scroll to swipe. 
 press Ctrl-A then X in the terminal. Anything you change inside the Virtual
 Comet is kept in `out/mechanix-os-virt.qcow2`; rebuild for a clean device.
 
+**Quick Boot.** Quit with `./mechumu stop` instead, from another terminal, and the
+next `./mechumu run` resumes where you left off in a few seconds, apps and all,
+like Android's emulator. `--cold` boots fresh instead, discarding the saved state. A few things don't carry
+over: the attached extension is detached when you save, the sensors' simulated
+readings and the connector's pin levels go back to their defaults, and a run with other options
+(`--frame`, `--headless`, `--app`) or after updating mechumu or QEMU boots cold.
+The saved state is used once, so after quitting any other way the next run boots
+cold rather than bringing back a state the disk has moved on from.
+
 ## Using it
 
 ### Logging in
@@ -99,7 +108,7 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | IMU (ICM-42605) | IIO devices `icm42605-accel` and `icm42605-gyro`, via the stock driver | `in_accel_*_raw`, iio-sensor-proxy orientation (`monitor-sensor`) |
 | Ambient light sensor (OPT3001) | IIO device `opt3001` | `in_illuminance_input`, iio-sensor-proxy light level |
 | Magnetometer (LIS2MDL) | IIO device `lis2mdl` | `in_magn_*_raw` |
-| Audio (MAX98090: speaker, headphones, mic) | A virtio sound card, PipeWire's default output (and input, on Linux hosts); plays on your computer's speakers (silent with `--headless`) | Any PipeWire, PulseAudio or ALSA app |
+| Audio (MAX98090: speaker, headphones, mic) | An HDA sound card, PipeWire's default output (and input, on Linux hosts); plays on your computer's speakers (silent with `--headless`) | Any PipeWire, PulseAudio or ALSA app |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
 The connector's pins carry whatever the attached extension does (see
@@ -286,7 +295,7 @@ The `virt` profile differs from the device image in a few places:
 - **Extension detection reply:** mechanix's I2C probe accepts any 8-byte reply framed `0xAA … 0xFF`, and Mecha hasn't published the format, so models echo the request.
 - **Keyboard extension:** its `fn` and `123` layer keys and the top row of buttons aren't modelled; their firmware isn't published.
 - **Device frame:** loads noVNC from jsDelivr, so it needs internet the first time. A mouse makes at most two fingers (Ctrl-drag pinches about the screen's centre); a touchscreen makes up to seven.
-- **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `VirtIO SoundCard`, not `max98090-audio`. On macOS, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
+- **Audio:** one stereo output and input, not the MAX98090's separate speaker, headphone and mic routes; ALSA names the card `HDA Intel`, not `max98090-audio` (HDA rather than virtio sound because QEMU can't snapshot virtio sound, which Quick Boot needs). On macOS and with `--headless`, QEMU can only play sound, so there the card has no mic. The Comet's vibration motor isn't modelled: Mecha's kernel doesn't build its driver, and nothing in Mechanix calls its haptics service.
 - **Battery estimate:** the time-remaining figure assumes a 2 W draw, which is a guess.
 - **EVK peripherals:** the model doesn't include the board's PMIC and I2C expanders, so their drivers log probe errors.
 

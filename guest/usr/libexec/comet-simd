@@ -70,6 +70,7 @@ VHCI = "/sys/devices/platform/vhci_hcd.0"
 HUB = ("10.0.2.2", 3240)
 ports = {}  # bus ID -> vhci port
 vhci_lock = threading.Lock()  # the I2C keep-alive thread and host commands both pick free ports
+suspended = threading.Event()  # set while a Quick Boot snapshot is taken: leave the buses detached
 
 
 def recv_exact(sock, n):
@@ -137,7 +138,7 @@ def keep_i2c_attached():
     """Always-there buses: the connector's pin bridge (1-2) and the Comet's internal sensor bus (1-3,
     whose devices the comet-board module registers). Reattach whenever the hub (re)starts."""
     while True:
-        for busid in ("1-2", "1-3"):
+        for busid in () if suspended.is_set() else ("1-2", "1-3"):
             port = ports.get(busid)
             if port is None or port_state(port) == 4:
                 try:
@@ -233,6 +234,21 @@ def set_battery(percent, state):
 
 def handle(line):
     cmd, *args = line.split()
+    if cmd == "suspend" and not args:  # Quick Boot: USB/IP connections can't survive a snapshot
+        suspended.set()
+        for busid in list(ports):
+            usbip_detach(busid)
+        return "buses detached"
+    if cmd == "resume" and len(args) == 1:  # after a Quick Boot: the host's time, then the buses back
+        time.clock_settime(time.CLOCK_REALTIME, float(args[0]))
+        for busid in list(ports):  # dead connections, if the snapshot was taken without suspend
+            usbip_detach(busid)
+        suspended.clear()
+        for _ in range(100):  # the keep-alive thread reattaches them
+            if all(ports.get(b) is not None and port_state(ports[b]) != 4 for b in ("1-2", "1-3")):
+                return "resumed"
+            time.sleep(0.1)
+        raise RuntimeError("buses 1-2 and 1-3 didn't come back; see the hub's log")
     if cmd == "battery":
         percent = float(args[0])
         state = args[1] if len(args) > 1 else ("full" if percent >= 100 else "discharging")

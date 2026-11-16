@@ -9,14 +9,18 @@ usage() {
     cat <<'USAGE'
 usage: mechumu <command> [options]
 
-  run [--app <desktop id|command>] [--frame | --headless] [-- <qemu args>]
+  run [--app <desktop id|command>] [--frame | --headless] [--cold] [-- <qemu args>]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
+        Resumes in seconds where 'mechumu stop' left off; --cold boots fresh.
         --frame shows the whole device in your browser: buttons, extension bay.
         --app boots straight into one app, e.g. --app org.mechanix.clock
   ctl battery <0-100> [charging|discharging|full] | gpio [<1-5> <0|1>] | adc <1-4> <volts>
       | pwm [<3|4> <hz> <duty>|off] | i2s [play|record] | spi <hex> | can <id>#<hex> | button power|home|volup|voldown
       | light <lux> | tilt <pitch> <roll> | accel|gyro <x> <y> <z> | heading <degrees> | sensors | iio | sound
-        Drive the running Virtual Comet's battery, connector pins, CAN bus, buttons and sensors.
+      | tap <x> <y> | swipe <x1> <y1> <x2> <y2> [ms] | screenshot [file.png]
+        Drive the running Virtual Comet's battery, connector pins, CAN bus, buttons, sensors and screen.
+  stop
+        Save the running Virtual Comet and quit (Quick Boot): the next 'mechumu run' resumes it.
   ext attach <keyboard|gamepad|io-breakout|model.py> | detach | status | <command...>
         Snap an extension onto the running Virtual Comet's connector, or drive the attached one.
   evk [-- <qemu args>]
@@ -35,6 +39,7 @@ case $cmd in
     evk) exec bash "$HERE/lib/run-evk.sh" "$@" ;;
     ctl) exec python3 "$HERE/lib/ctl.py" "$@" ;;
     ext) exec python3 "$HERE/lib/ctl.py" --hub "$@" ;;
+    stop) exec python3 "$HERE/lib/ctl.py" --hub stop ;;
     build)
         command -v docker >/dev/null || { echo "mechumu build needs Docker; or run build/build.sh as root on Fedora 44 arm64" >&2; exit 1; }
         mkdir -p "$MECHUMU_OUT"

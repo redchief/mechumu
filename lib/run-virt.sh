@@ -1,16 +1,18 @@
 #!/bin/bash
-# mechumu run [--app <desktop id|command>] [--frame | --headless] [-- <qemu args>]
+# mechumu run [--app <desktop id|command>] [--frame | --headless] [--cold] [-- <qemu args>]
 # Boots $MECHUMU_OUT/mechanix-os-virt.qcow2 on QEMU's arm64 `virt` machine: the screen in a
 # window (or, with --frame, in a browser page drawn as the device, buttons and extensions included),
 # the serial console in this terminal (quit with Ctrl-A then X). Changes persist in the image.
+# Quick Boot: `mechumu stop` saves the running device; the next run resumes it (--cold: boot fresh).
 set -euo pipefail
 
-APP= HEADLESS= FRAME=
+APP= HEADLESS= FRAME= COLD=
 while (($#)); do
     case $1 in
         --app) APP=${2:?--app needs a desktop id or command}; shift 2 ;;
         --headless) HEADLESS=1; shift ;;
         --frame) FRAME=1; shift ;;
+        --cold) COLD=1; shift ;;
         --) shift; break ;;
         *) break ;;
     esac
@@ -29,12 +31,33 @@ for cand in "${EFI_CODE:-}" "$QEMU_SHARE/edk2-aarch64-code.fd" \
 done
 [[ -f "${EFI_CODE:-}" ]] || { echo "qemu-system-aarch64 or its aarch64 UEFI firmware not found - install qemu, or set EFI_CODE" >&2; exit 1; }
 
-# pflash units must be exactly 64 MiB; a fresh vars store every run so stale boot entries never carry over.
+# Quick Boot. `mechumu stop` has the hub save the device (RAM and disks) as snapshot "quickboot"
+# in the image and the vars store, then quit. A run with the same settings resumes from it; the hub
+# then deletes it, so a run that ends any other way (Ctrl-A X, a crash, powering off) boots cold
+# next time instead of bringing back a state its disk has moved on from. A snapshot only loads
+# into the same machine, so other settings (--frame, --headless, --app, -- args), another QEMU or
+# another version of this script boot cold too.
+CONFIG="$(uname -s) headless=$HEADLESS frame=$FRAME app=$APP args=$* $(cksum <"${BASH_SOURCE[0]}") $(qemu-system-aarch64 --version | head -1)"
+RESUME=
+if [[ -z $COLD && -f .efi-vars.qcow2 && $(cat .quickboot-config 2>/dev/null) == "$CONFIG" ]] &&
+   qemu-img snapshot -l "$IMAGE" 2>/dev/null | grep -q ' quickboot '; then
+    RESUME=1
+    echo "mechumu: resuming where 'mechumu stop' left off (--cold boots fresh)"
+elif qemu-img snapshot -l "$IMAGE" 2>/dev/null | grep -q ' quickboot '; then
+    qemu-img snapshot -d quickboot "$IMAGE"
+fi
+printf '%s' "$CONFIG" > .quickboot-config
+
+# pflash units must be exactly 64 MiB. A fresh vars store every cold boot so stale boot entries never
+# carry over; qcow2, so it can hold its part of a Quick Boot snapshot.
 # Fixed names in $MECHUMU_OUT, overwritten each run: exec below means no exit trap could delete temp files.
-EFI_VARS=.efi-vars.fd
+EFI_VARS=.efi-vars.qcow2
 EFI_CODE_PADDED=.efi-code.fd
-rm -f "$EFI_VARS"
-truncate -s 64M "$EFI_VARS"
+rm -f .efi-vars.fd  # the raw store of older versions
+if [[ -z $RESUME ]]; then
+    rm -f "$EFI_VARS"
+    qemu-img create -q -f qcow2 "$EFI_VARS" 64M
+fi
 cp "$EFI_CODE" "$EFI_CODE_PADDED"
 truncate -s 64M "$EFI_CODE_PADDED"
 
@@ -59,17 +82,18 @@ else
     GPU=(-device virtio-gpu-gl-pci,xres=1080,yres=1240 -display gtk,gl=on,zoom-to-fit=on)
 fi
 
-# Sound: the Comet's MAX98090 (speaker, headphones, mic) becomes a virtio sound card, played on the
-# host's audio output. Headless runs make no sound. QEMU's coreaudio backend is playback-only, so on
-# macOS the card has no mic (streams=1: output only) rather than one that records silence.
+# Sound: the Comet's MAX98090 (speaker, headphones, mic) becomes an HDA sound card, played on the
+# host's audio output: HDA, not virtio-sound, because QEMU can't snapshot virtio-sound (Quick Boot).
+# Headless runs make no sound. QEMU's coreaudio and wav backends are playback-only, so on macOS and
+# headless the card has no mic (hda-output) rather than one that records silence.
 # Headless: wav into /dev/null, not `none`, which paces playback so unevenly that always-open streams
 # (the keyboard's key-tap sound) underrun many times a second.
 if [[ -n $HEADLESS ]]; then
-    AUDIO=(-audiodev wav,id=snd0,path=/dev/null -device virtio-sound-pci,audiodev=snd0)
+    AUDIO=(-audiodev wav,id=snd0,path=/dev/null -device intel-hda -device hda-output,audiodev=snd0)
 elif [[ "$(uname -s)" == Darwin ]]; then
-    AUDIO=(-audiodev coreaudio,id=snd0 -device virtio-sound-pci,audiodev=snd0,streams=1)
+    AUDIO=(-audiodev coreaudio,id=snd0 -device intel-hda -device hda-output,audiodev=snd0)
 else
-    AUDIO=(-device virtio-sound-pci)  # QEMU's default backend: PipeWire, PulseAudio, ...
+    AUDIO=(-device intel-hda -device hda-duplex)  # QEMU's default backend: PipeWire, PulseAudio, ...
 fi
 
 # Settings for the guest travel as systemd credentials in SMBIOS OEM strings; QEMU option values
@@ -86,7 +110,8 @@ done
 
 # The extension connector (`mechumu ext`): USB/IP for the connector's USB, I2C, GPIO and ADC pins,
 # and the other ends of UART1/UART2 above. It exits when QEMU, which takes over this process, does.
-MECHUMU_QEMU_PID=$$ python3 "$LIB/hub.py" >hub.log 2>&1 &  # $$ becomes QEMU at the exec below
+# MECHUMU_RESUME: after a Quick Boot the hub sets the guest's clock and reattaches its buses.
+MECHUMU_QEMU_PID=$$ MECHUMU_RESUME=$RESUME python3 "$LIB/hub.py" >hub.log 2>&1 &  # $$ becomes QEMU at the exec below
 if [[ -n $FRAME ]]; then
     url=http://127.0.0.1:8090/
     echo "mechumu: the device frame is at $url"
@@ -95,13 +120,16 @@ fi
 
 # acpi=off: the firmware hands Linux a devicetree, as a Comet's bootloader does; the onboard
 # sensors' drivers take their configuration from it (kmod/comet-board).
+LOADVM=(-name "Virtual Comet")  # never empty: macOS bash 3.2 treats an empty array as unset under set -u
+[[ -n $RESUME ]] && LOADVM+=(-loadvm quickboot)
 exec qemu-system-aarch64 \
     -machine virt,acpi=off \
+    "${LOADVM[@]}" \
     "${ACCEL[@]}" \
     -smp 4 \
     -m 4096 \
     -drive if=pflash,format=raw,readonly=on,file="$EFI_CODE_PADDED" \
-    -drive if=pflash,format=raw,file="$EFI_VARS" \
+    -drive if=pflash,format=qcow2,file="$EFI_VARS" \
     -drive file="$IMAGE",if=none,id=bootdisk,format=qcow2 \
     -device virtio-blk-pci,drive=bootdisk,bootindex=1 \
     -device virtio-rng-pci \

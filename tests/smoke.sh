@@ -1,12 +1,13 @@
 #!/bin/bash
 # Boots the Virtual Comet headless and drives every simulated device through `mechumu ctl` and every
-# built-in extension through `mechumu ext`, end to end through the guest. Needs out/ (`mechumu build`).
+# built-in extension through `mechumu ext`, end to end through the guest, then saves and resumes it
+# (Quick Boot). Needs out/ (`mechumu build`). Boots --cold, so it discards a state saved by `mechumu stop`.
 # Usage: tests/smoke.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 log=$(mktemp -t mechumu-smoke.XXXXXX)
-./mechumu run --headless </dev/null >"$log" 2>&1 &
+./mechumu run --headless --cold </dev/null >"$log" 2>&1 &
 qemu=$!
 trap 'kill $qemu 2>/dev/null || true; rm -f "$log"' EXIT
 
@@ -37,7 +38,7 @@ expect "opt3001=500lux" ctl iio
 expect "icm42605-accel" ctl iio
 expect "lis2mdl" ctl iio
 expect "ok tilted" ctl tilt 90 0
-expect "VirtIO SoundCard" ctl sound
+expect "HDA Intel" ctl sound
 expect "ok tapped 540,620" ctl tap 540 620
 expect "ok swiped 540,900 -> 540,300" ctl swipe 540 900 540 300 100
 expect "error usage: tap" ctl tap 1
@@ -73,4 +74,23 @@ expect "CP2102" ctl usb
 expect "ok no I2S extension attached" ctl i2s
 expect "ok io-breakout detached" ext detach
 expect "error nothing attached" ext press a
+
+expect "ok saved" stop
+wait $qemu || true
+start=$(date +%s)
+./mechumu run --headless </dev/null >"$log" 2>&1 &
+qemu=$!
+for _ in $(seq 60); do
+    ./mechumu ctl iio 2>/dev/null | grep -q "dln2-adc" && ./mechumu ctl iio | grep -q opt3001 && break
+    kill -0 $qemu 2>/dev/null || { cat "$log"; echo "FAIL: qemu exited on resume"; exit 1; }
+    sleep 0.5
+done
+grep -q "resuming" "$log" || { echo "FAIL: booted cold instead of resuming"; exit 1; }
+took=$(( $(date +%s) - start ))
+(( took < 20 )) || { echo "FAIL: resuming took ${took}s"; exit 1; }
+echo "ok   resumed in ${took}s"
+expect "opt3001" ctl iio
+expect "ok keyboard attached" ext attach keyboard
+expect "ok typed 2 characters" ext type hi
+expect "ok tapped" ctl tap 540 620
 echo PASS
