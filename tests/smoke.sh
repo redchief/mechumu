@@ -6,6 +6,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Another Virtual Comet would answer for this one: they share the hub's sockets and ports.
+! ./mechumu ctl usb >/dev/null 2>&1 || { echo "FAIL: a Virtual Comet is already running; stop it first (mechumu stop)"; exit 1; }
 log=$(mktemp -t mechumu-smoke.XXXXXX)
 ./mechumu run --headless --cold </dev/null >"$log" 2>&1 &
 qemu=$!

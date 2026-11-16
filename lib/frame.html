@@ -25,6 +25,7 @@
   #vnc { position: absolute; inset: 0; touch-action: none; }
   .screen .hint { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; color: var(--dim); text-align: center; padding: 24px;
                   background: rgba(0,0,0,.6); }
+  .screen .hint[hidden] { display: none; }
   .hw { position: absolute; background: #333336; border: 0; border-radius: 3px; cursor: pointer; padding: 0; }
   .hw:hover { background: var(--accent); }
   .hw:active { transform: scale(.94); }
@@ -267,6 +268,7 @@ function fitStage() {
   stage.style.width = `${side ? h : w}px`; stage.style.height = `${side ? w : h}px`;
 }
 function turnTo(r) { rot = ((r % 360) + 360) % 360; device.style.setProperty("--rot", `${rot}deg`); fitStage(); }
+fitStage();  // now, not just on the first resize report: the stage starts with no size
 new ResizeObserver(fitStage).observe(device);
 $("#tools").addEventListener("click", (e) => {
   const b = e.target.closest("[data-turn]");
@@ -360,7 +362,8 @@ async function refresh() {
   attached = name;
   $("#bay").replaceWith(Object.assign(document.createElement("div"), { id: "bay", className: "bay" }));  // drops the old extension's listeners
   document.querySelectorAll("#choices [data-ext]").forEach((b) => b.setAttribute("aria-pressed", String((b.dataset.ext || null) === name)));
-  render[name] ? render[name]() : render.custom(name);
+  await (render[name] ? render[name]() : render.custom(name));
+  fitStage();  // the device's size changed with its extension
 }
 setInterval(refresh, 2000);
 
