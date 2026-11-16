@@ -36,6 +36,8 @@ expect "error usage: battery" ctl battery 101 charging
 expect "ok home pressed" ctl button home
 expect "mechanix-launch" shell pgrep -l mechanix-launch
 expect "ok unlocked" ctl unlock
+expect "ok brightness 70%" ctl brightness
+expect "ok brightness 40%" ctl brightness 40
 # The onboard sensors: set on the host, read back through the guest's own drivers.
 expect "ok light 500 lux" ctl light 500
 expect "opt3001=500lux" ctl iio

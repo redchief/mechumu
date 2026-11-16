@@ -12,6 +12,7 @@
   mechumu ctl can 123#DEADBEEF           # inject a frame on can0, as if from an extension
   mechumu ctl button home                # press a hardware button: power, home, volup, voldown
   mechumu ctl unlock                     # unlock the lock screen (through logind)
+  mechumu ctl brightness [0-100]         # the panel backlight: read it, or set it in percent
   mechumu ctl light 500                  # ambient light, lux (OPT3001)
   mechumu ctl tilt 90 0                  # pitch, roll in degrees: 90 0 = upright (ICM-42605)
   mechumu ctl accel|gyro <x> <y> <z>     # raw motion: m/s², degrees/s

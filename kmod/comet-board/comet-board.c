@@ -21,7 +21,12 @@
  * interface for them (mainline dln2 takes only interface 0), and this module's USB driver gives
  * each its own one-channel pwmchip, as the Comet's i.MX PWM blocks are. Each setting goes to the
  * host as one control request.
+ *
+ * And it gives the screen the Comet's panel backlight, under the same name, so Mechanix's Display
+ * service (and the launcher's brightness slider) work as on the device; mechumu shows the level
+ * by dimming the device frame's screen.
  */
+#include <linux/backlight.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -231,6 +236,29 @@ static int add_imu_node(void)
 	return ret;
 }
 
+/* The value itself is all there is: sysfs stores it, and the host reads it back from there. */
+static int comet_backlight_update(struct backlight_device *bd)
+{
+	return 0;
+}
+
+static const struct backlight_ops comet_backlight_ops = { .update_status = comet_backlight_update };
+
+/* The Comet's DSI panel backlight, by its name there; 70% at boot, as comet-backlight.service sets it. */
+static void add_backlight(void)
+{
+	struct backlight_properties props = {
+		.type = BACKLIGHT_RAW,
+		.max_brightness = 255,
+		.brightness = 255 * 70 / 100,
+	};
+	struct backlight_device *bd = backlight_device_register("32e60000.dsi.0", NULL, NULL,
+								 &comet_backlight_ops, &props);
+
+	if (IS_ERR(bd))
+		pr_warn("comet-board: no panel backlight (%ld)\n", PTR_ERR(bd));
+}
+
 static int __init comet_board_init(void)
 {
 	int ret = add_imu_node();
@@ -255,10 +283,11 @@ static int __init comet_board_init(void)
 	}
 	i2c_for_each_dev(NULL, existing_adapter);
 	bus_for_each_dev(&platform_bus_type, NULL, NULL, existing_spi);
+	add_backlight();
 	return 0;
 }
 module_init(comet_board_init);
 /* No module_exit: the devices it registers keep using its devicetree node. */
 
-MODULE_DESCRIPTION("Mecha Comet board sensors and connector SPI and PWM for the Virtual Comet (mechumu)");
+MODULE_DESCRIPTION("Mecha Comet board sensors, connector SPI and PWM, and panel backlight for the Virtual Comet (mechumu)");
 MODULE_LICENSE("GPL");

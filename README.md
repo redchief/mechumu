@@ -106,6 +106,7 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 ./mechumu ctl light 500                # ambient light in lux
 ./mechumu ctl tilt 90 0                # pitch and roll in degrees: 90 0 is upright, 0 0 flat
 ./mechumu ctl heading 90               # compass heading: facing east
+./mechumu ctl brightness 40            # the panel backlight, in percent (or no number: read it)
 ./mechumu ctl tap 540 620              # touch the screen at x, y (pixels of the 1080x1240 panel)
 ./mechumu ctl swipe 540 1100 540 300   # drag a finger across it (optional: duration in ms)
 ./mechumu ctl screenshot shot.png      # save the screen
@@ -126,6 +127,7 @@ While the Virtual Comet is running, drive its hardware from another terminal:
 | Ambient light sensor (OPT3001) | IIO device `opt3001` | `in_illuminance_input`, iio-sensor-proxy light level |
 | Magnetometer (LIS2MDL) | IIO device `lis2mdl` | `in_magn_*_raw` |
 | Audio (MAX98090: speaker, headphones, mic) | An HDA sound card, PipeWire's default output (and input, on Linux hosts); plays on your computer's speakers (silent with `--headless`) | Any PipeWire, PulseAudio or ALSA app |
+| Panel backlight | `/sys/class/backlight/32e60000.dsi.0`, the Comet's name for it, at 70% after boot; the device frame dims its screen to match | `mechanix-system-service` (`org.mechanix.services.Display`), the launcher's brightness slider, `mechumu ctl brightness` |
 | Power, Home, Vol± buttons | Input devices `/dev/input/comet-*`, wired to `mechanix-system-service` | Its `org.mechanix.services.HwButton` D-Bus signals |
 
 The connector's pins carry whatever the attached extension does (see

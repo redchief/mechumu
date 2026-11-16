@@ -234,6 +234,15 @@ def set_battery(percent, state):
 
 def handle(line):
     cmd, *args = line.split()
+    if cmd == "brightness" and len(args) <= 1:  # the panel backlight (comet-board), as a percentage
+        bl = "/sys/class/backlight/32e60000.dsi.0"
+        top = int(open(f"{bl}/max_brightness").read())
+        if args:
+            pct = float(args[0])
+            if not 0 <= pct <= 100:
+                raise ValueError("usage: brightness [0-100]")
+            open(f"{bl}/brightness", "w").write(str(round(top * pct / 100)))
+        return f"brightness {round(int(open(f'{bl}/brightness').read()) * 100 / top)}%"
     if cmd == "unlock" and not args:  # the lock screen, through logind (the launcher listens)
         dpms = glob.glob("/sys/class/drm/card*-Virtual-*/dpms")
         if dpms and open(dpms[0]).read().strip() == "Off":  # blanked: only the power key wakes it
@@ -327,7 +336,7 @@ def handle(line):
             usbip_detach(args[1])
             key_event("extension", 0)
         return f"{args[1]} {args[0]}ed"
-    raise ValueError("commands: unlock | battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | i2s play|record | usb | iio | sound")
+    raise ValueError("commands: unlock | brightness [0-100] | battery <pct> [state] | can <id>#<hex> | button power|home|volup|voldown | spi <hex> | pwm <3|4> <hz> <duty>|off | i2s play|record | usb | iio | sound")
 
 
 def main():

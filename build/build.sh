@@ -89,6 +89,7 @@ grep -qs '^MECHANIX_LOCKSCREEN_PIN=' mkosi.env || { echo 'MECHANIX_LOCKSCREEN_PI
 # The comet-board kernel module (kmod/) is built inside the image build, against the image's kernel.
 # Its workspace on the cache volume: the build overlay can't stack on a container's own overlayfs.
 mkdir -p "$CACHE/mkosi-workspace"
+rm -rf "$CACHE/mkosi-workspace"/mkosi-workspace-*  # a crashed build's leftovers: several GB each
 mkosi --profile=virt --image-version="$(date -u +%Y%m%d-%H%M)" \
     --environment=MECHA_COMMIT_SHA="mechumu-${MECHUMU_REV:-local}" \
     --build-package="kernel-devel-7.1.5-0.mecha.*" --build-package=gcc --build-package=make \

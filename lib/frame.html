@@ -15,9 +15,10 @@
   main { display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; align-items: flex-start; padding: 24px 16px; }
 
   /* The Comet: screen module on top, a home pill, the extension below; buttons on the edges. */
-  /* The device turns inside the stage, which takes the turned device's size. */
-  .stage { position: relative; flex: none; }
-  .device { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(var(--rot, 0deg)); transition: transform .3s;
+  /* The device turns inside the stage; turned sideways, the stage takes the turned size (fitStage) and
+     the device, still laid out upright, overflows it evenly. Upright, plain layout sizes both. */
+  .stage { display: grid; place-items: center; flex: none; }
+  .device { position: relative; transform: rotate(var(--rot, 0deg)); transition: transform .3s;
             width: min(400px, calc(100vw - 32px)); padding: 10px 10px 14px; border-radius: 26px;
             background: linear-gradient(180deg, #4a4a4d, var(--body) 40%); box-shadow: 0 1px 0 #5a5a5e inset, 0 24px 48px rgba(0,0,0,.5); }
   .screen { aspect-ratio: 1080 / 1240; background: #000; border-radius: 18px; overflow: hidden; position: relative;
@@ -264,11 +265,11 @@ let rot = 0;
 const POSE = { 0: "90 0", 90: "0 90", 180: "-90 0", 270: "0 -90" };
 const stage = $("#stage"), device = $("#device");
 function fitStage() {
-  const w = device.offsetWidth, h = device.offsetHeight, side = rot % 180;
-  stage.style.width = `${side ? h : w}px`; stage.style.height = `${side ? w : h}px`;
+  const side = rot % 180;
+  stage.style.width = side ? `${device.offsetHeight}px` : "";
+  stage.style.height = side ? `${device.offsetWidth}px` : "";
 }
 function turnTo(r) { rot = ((r % 360) + 360) % 360; device.style.setProperty("--rot", `${rot}deg`); fitStage(); }
-fitStage();  // now, not just on the first resize report: the stage starts with no size
 new ResizeObserver(fitStage).observe(device);
 $("#tools").addEventListener("click", (e) => {
   const b = e.target.closest("[data-turn]");
@@ -290,6 +291,17 @@ let touchWs;
 const touch = (m) => touchWs.readyState === 1 && touchWs.send(m);
 const screenEl = $("#vnc");
 const fingers = new Map();  // pointerId -> its slots
+// The panel backlight (comet-board in the guest): the screen dims as the Comet's would.
+// shortcut: polled every 2 s, so a slider drag shows in steps; push it from the guest if that matters.
+async function backlight() {
+  try {
+    const r = await (await fetch("/cmd", { method: "POST", headers: { "X-Mechumu": "1" }, body: "ctl brightness" })).text();
+    const m = r.match(/^ok brightness (\d+)%/);
+    if (m) screenEl.style.filter = `brightness(${m[1] / 100})`;
+  } catch {}  // booting, or quitting: keep the last level
+}
+setInterval(backlight, 2000);
+backlight();
 // The screen's on-page box, turned with the device: map back to the panel's own x, y.
 const where = (e) => {
   const r = ($("canvas", screenEl) || screenEl).getBoundingClientRect(), u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
