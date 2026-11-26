@@ -7,7 +7,7 @@
 # Quick Boot: `mechumu stop` saves the running device; the next run resumes it (--cold: boot fresh).
 set -euo pipefail
 
-APP= HEADLESS= FRAME= COLD= BROWSER=
+APP= HEADLESS= FRAME= COLD= BROWSER= KERNEL= INITRD= CMDLINE=
 while (($#)); do
     case $1 in
         --app) APP=${2:?--app needs a desktop id or command}; shift 2 ;;
@@ -15,6 +15,9 @@ while (($#)); do
         --frame) FRAME=1; shift ;;
         --cold) COLD=1; shift ;;
         --browser) FRAME=1 BROWSER=1; shift ;;
+        --kernel) KERNEL=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "${2:?--kernel needs a path}"); COLD=1; shift 2 ;;
+        --initrd) INITRD=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "${2:?--initrd needs a path}"); COLD=1; shift 2 ;;
+        --cmdline) CMDLINE=${2:?--cmdline needs kernel arguments}; shift 2 ;;
         --) shift; break ;;
         *) break ;;
     esac
@@ -41,7 +44,7 @@ done
 # next time instead of bringing back a state its disk has moved on from. A snapshot only loads
 # into the same machine, so other settings (--frame, --headless, --app, -- args), another QEMU or
 # another version of this script boot cold too.
-CONFIG="$(uname -s) headless=$HEADLESS frame=$FRAME app=$APP args=$* $(cksum <"${BASH_SOURCE[0]}") $(command -v "$QEMU") $("$QEMU" --version | head -1)"
+CONFIG="$(uname -s) headless=$HEADLESS frame=$FRAME app=$APP kernel=$KERNEL initrd=$INITRD cmdline=$CMDLINE args=$* $(cksum <"${BASH_SOURCE[0]}") $(command -v "$QEMU") $("$QEMU" --version | head -1)"
 RESUME=
 if [[ -z $COLD && -f .efi-vars.qcow2 && $(cat .quickboot-config 2>/dev/null) == "$CONFIG" ]] &&
    qemu-img snapshot -l "$IMAGE" 2>/dev/null | grep -q ' quickboot '; then
@@ -135,6 +138,17 @@ fi
 # sensors' drivers take their configuration from it (kmod/comet-board).
 LOADVM=(-name "Virtual Comet")  # never empty: macOS bash 3.2 treats an empty array as unset under set -u
 [[ -n $RESUME ]] && LOADVM+=(-loadvm quickboot)
+if [[ -n $KERNEL ]]; then
+    [[ -f $KERNEL ]] || { echo "mechumu: kernel not found: $KERNEL" >&2; exit 1; }
+    LOADVM+=(-kernel "$KERNEL")
+    if [[ -n $INITRD ]]; then
+        [[ -f $INITRD ]] || { echo "mechumu: initrd not found: $INITRD" >&2; exit 1; }
+        LOADVM+=(-initrd "$INITRD")
+    elif [[ -f evk-boot/initrd ]]; then
+        LOADVM+=(-initrd evk-boot/initrd)
+    fi
+    LOADVM+=(-append "console=ttyAMA0 root=PARTLABEL=root-arm64 rw $CMDLINE")
+fi
 exec "$QEMU" \
     -machine virt,acpi=off \
     "${LOADVM[@]}" \

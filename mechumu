@@ -9,12 +9,14 @@ usage() {
     cat <<'USAGE'
 usage: mechumu [--device <name>] <command> [options]
 
-  run [--app <desktop id|command>] [--frame [--browser] | --headless] [--cold] [-- <qemu args>]
+  run [--app <desktop id|command>] [--frame [--browser] | --headless] [--cold]
+      [--kernel <path> [--initrd <path>] [--cmdline <args>]] [-- <qemu args>]
         Boot the Virtual Comet: screen in a window, serial console here (Ctrl-A X quits).
         Resumes in seconds where 'mechumu stop' left off; --cold boots fresh.
         --frame shows the whole device in a window: buttons, extension bay, toolbar
         (the app in app/, built on first use with Rust; --browser: in your browser instead).
         --app boots straight into one app, e.g. --app org.mechanix.clock
+        --kernel/--initrd/--cmdline boot a custom Linux kernel against the guest rootfs.
   ctl battery <0-100> [charging|discharging|full] | gpio [<1-5> <0|1>] | adc <1-4> <volts>
       | pwm [<3|4> <hz> <duty>|off] | i2s [play|record] | spi <hex> | can <id>#<hex> | button power|home|volup|voldown | unlock | brightness [0-100]
       | light <lux> | tilt <pitch> <roll> | accel|gyro <x> <y> <z> | heading <degrees> | sensors | iio | sound
@@ -32,6 +34,10 @@ usage: mechumu [--device <name>] <command> [options]
         Copy a build into the guest, to /opt/ by default (like adb push).
   launch <command> [args...]
         Run a program in the running session, as the mecha user, with the session's environment.
+  forward <host_port> <guest_port>
+        Forward a localhost port into the running Virtual Comet over SSH (Ctrl-C stops it).
+  pull [tag]
+        Download a prebuilt Virtual Comet image from GitHub Releases into $MECHUMU_OUT.
   devices [rm <name>]
         List devices (--device <name>: a separate Virtual Comet, its own disk and saved state,
         created on first run as a copy of the default one), or delete one.
@@ -151,6 +157,28 @@ os.execvpe(sys.argv[1], sys.argv[1:], env)
                 -v mechumu-cache:/var/cache/mechumu -v "$MECHUMU_OUT":/out -e MECHUMU_REV="$rev" \
                 fedora:44 bash -euc 'mkdir /mechumu && tar -xf - -C /mechumu && /mechumu/build/build.sh /out'
         ;;
+    pull)
+        tag=${1:-latest}
+        repo=${MECHUMU_REPO:-redchief/mechumu}
+        [[ $tag == latest ]] && base="https://github.com/$repo/releases/latest/download" || base="https://github.com/$repo/releases/download/$tag"
+        mkdir -p "$MECHUMU_OUT"
+        echo "mechumu: downloading prebuilt image ($tag) into $MECHUMU_OUT"
+        curl -fL --progress-bar "$base/mechanix-os-virt.qcow2" -o "$MECHUMU_OUT/mechanix-os-virt.qcow2.tmp"
+        mv "$MECHUMU_OUT/mechanix-os-virt.qcow2.tmp" "$MECHUMU_OUT/mechanix-os-virt.qcow2"
+        if curl -fsL "$base/evk-boot.tar.gz" -o "$MECHUMU_OUT/evk-boot.tar.gz.tmp"; then
+            rm -rf "$MECHUMU_OUT/evk-boot"
+            tar -C "$MECHUMU_OUT" -xzf "$MECHUMU_OUT/evk-boot.tar.gz.tmp"
+            rm -f "$MECHUMU_OUT/evk-boot.tar.gz.tmp"
+        fi
+        if curl -fsL "$base/SHA256SUMS" -o "$MECHUMU_OUT/SHA256SUMS"; then
+            (cd "$MECHUMU_OUT" && (sha256sum -c --ignore-missing SHA256SUMS 2>/dev/null || shasum -a 256 -c --ignore-missing SHA256SUMS))
+        fi
+        echo "mechumu: ready — run './mechumu run'" ;;
+    forward)
+        [[ $# -eq 2 && $1 =~ ^[0-9]+$ && $2 =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 && $2 >= 1 && $2 <= 65535 )) || {
+            echo "usage: mechumu forward <host_port> <guest_port>" >&2; exit 2; }
+        echo "mechumu: forwarding 127.0.0.1:$1 -> guest:$2 (Ctrl-C to stop)"
+        guest -N -L "127.0.0.1:$1:127.0.0.1:$2" root@localhost ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac
