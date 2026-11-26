@@ -31,12 +31,12 @@ You need QEMU 10.0 or later (older versions run `mechumu run` but lack the EVK m
 `sudo dnf install qemu-system-aarch64 qemu-img` on Fedora, or
 `sudo apt install qemu-system-arm qemu-utils` on Debian/Ubuntu.
 
-There are no prebuilt images yet, so build one first (an arm64 host with Docker;
+Download a prebuilt image from GitHub Releases (once a release is published), or build one from source (an arm64 host with Docker;
 see [Building from source](#building-from-source)), then run it:
 
 ```sh
 git clone https://github.com/redchief/mechumu.git && cd mechumu
-./mechumu build
+./mechumu pull                         # or ./mechumu build
 ./mechumu run
 ```
 
@@ -207,7 +207,12 @@ Like `adb`, for the running Virtual Comet:
 ./mechumu logs                         # follow the journal; ./mechumu logs mechanix-keyboard follows one app's log
 ./mechumu push build/my_app            # copy a file or directory to /opt/ (or: push <path> <guest dir>)
 ./mechumu launch /opt/my_app/my_app    # run it in the session, as the mecha user; Ctrl-C stops it
+./mechumu forward 8080 8080            # forward localhost:8080 into the guest over SSH
 ```
+
+For kernel and OS work on the `virt` machine, pass `--kernel <path>` (and optionally
+`--initrd <path>` and `--cmdline <args>`) to `mechumu run` to boot a custom kernel
+against the guest rootfs without rebuilding the image.
 
 `launch` starts the program with the session's environment (its Wayland display
 and the rendering settings the Virtual Comet needs), so it appears on the screen
