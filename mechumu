@@ -38,6 +38,11 @@ usage: mechumu [--device <name>] <command> [options]
         Run a program in the running session, as the mecha user, with the session's environment.
   forward <host_port> <guest_port>
         Forward a localhost port into the running Virtual Comet over SSH (Ctrl-C stops it).
+  sdk [<command...>]
+        Run a build command (or an interactive shell) in a Fedora 44 arm64 SDK container
+        with $PWD mounted at /work (for building Comet apps on macOS/x86_64).
+  kmod
+        Rebuild kmod/comet-board against the running Virtual Comet's kernel and reload it.
   pull [tag]
         Download a prebuilt Virtual Comet image from GitHub Releases into $MECHUMU_OUT.
   devices [rm <name>]
@@ -199,6 +204,33 @@ os.execvpe(sys.argv[1], sys.argv[1:], env)
             echo "usage: mechumu forward <host_port> <guest_port>" >&2; exit 2; }
         echo "mechumu: forwarding 127.0.0.1:$1 -> guest:$2 (Ctrl-C to stop)"
         guest -N -L "127.0.0.1:$1:127.0.0.1:$2" root@localhost ;;
+    sdk)
+        command -v docker >/dev/null || { echo "mechumu sdk needs Docker" >&2; exit 1; }
+        image=mechumu-sdk:fedora44
+        if ! docker image inspect "$image" >/dev/null 2>&1; then
+            echo "mechumu: building $image (once)"
+            docker build --platform linux/arm64 -t "$image" -f "$HERE/build/Dockerfile.sdk" "$HERE/build"
+        fi
+        tty_opts=(-i); [[ -t 0 && -t 1 ]] && tty_opts+=(-t)
+        if [[ $# -eq 0 ]]; then set -- /bin/bash; fi
+        exec docker run --rm "${tty_opts[@]}" --platform linux/arm64 \
+            -v "$PWD":/work -v mechumu-sdk-cargo:/var/cache/cargo -w /work "$image" "$@" ;;
+    kmod)
+        scp -q -r -P "$MECHUMU_SSH_PORT" "${SSH_OPTS[@]:2}" "$HERE/kmod/comet-board" root@localhost:/tmp/
+        guest root@localhost bash -euc '
+            kver=$(uname -r)
+            if [ ! -d "/lib/modules/$kver/build" ]; then
+                echo "mechumu kmod: kernel headers missing in guest; install with:" >&2
+                echo "  ./mechumu shell dnf install -y kernel-devel-$kver gcc make" >&2
+                exit 1
+            fi
+            make -s -C "/lib/modules/$kver/build" M=/tmp/comet-board modules
+            install -D -m 0644 /tmp/comet-board/comet-board.ko "/lib/modules/$kver/extra/comet-board.ko"
+            depmod -a
+            rmmod comet_board 2>/dev/null || true
+            modprobe comet-board
+            echo "mechumu kmod: reloaded comet-board ($kver)"
+        ' ;;
     help | -h | --help) usage ;;
     *) usage >&2; exit 2 ;;
 esac

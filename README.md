@@ -209,6 +209,8 @@ Like `adb`, for the running Virtual Comet:
 ./mechumu sync build/my_app --restart /opt/my_app/my_app  # watch & sync changes, restarting the app
 ./mechumu launch /opt/my_app/my_app    # run it in the session, as the mecha user; Ctrl-C stops it
 ./mechumu forward 8080 8080            # forward localhost:8080 into the guest over SSH
+./mechumu sdk cargo build --release    # build an aarch64 Comet app in a Fedora 44 arm64 container
+./mechumu kmod                         # rebuild kmod/comet-board and reload it in the running VM
 ```
 
 For kernel and OS work on the `virt` machine, pass `--kernel <path>` (and optionally

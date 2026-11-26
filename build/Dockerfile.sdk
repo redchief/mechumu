@@ -1,0 +1,12 @@
+# Fedora 44 arm64 SDK container for cross-building Mecha Comet apps on macOS/Linux.
+FROM --platform=linux/arm64 fedora:44
+
+RUN dnf -y -q install --setopt=install_weak_deps=False \
+        cargo rust gcc gcc-c++ make cmake meson ninja-build pkgconf-pkg-config git \
+        wayland-devel mesa-libEGL-devel mesa-libGLES-devel libdrm-devel \
+        libxkbcommon-devel libgpiod-devel dbus-devel systemd-devel \
+        alsa-lib-devel pulseaudio-libs-devel glib2-devel && \
+    dnf clean all
+
+ENV CARGO_HOME=/var/cache/cargo
+WORKDIR /work
