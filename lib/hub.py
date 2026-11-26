@@ -19,8 +19,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import connector, sensors
 
-USBIP_PORT = 3240
-FRAME_PORT = 8090
+USBIP_PORT = int(os.environ.get("MECHUMU_USBIP_PORT", 3240))
+FRAME_PORT = int(os.environ.get("MECHUMU_FRAME_PORT", 8090))
 EXTENSIONS = os.path.join(os.path.dirname(HERE), "extensions")
 
 

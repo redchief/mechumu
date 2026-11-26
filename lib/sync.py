@@ -12,7 +12,7 @@ import tarfile
 import time
 
 SSH_OPTS = [
-    "-p", "2222",
+    "-p", os.environ.get("MECHUMU_SSH_PORT", "2222"),
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
     "-o", "LogLevel=ERROR",

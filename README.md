@@ -232,7 +232,7 @@ an APFS Mac: a clone) on its first `run`.
 ./mechumu devices                       # list them; devices rm scratch deletes one
 ```
 
-One runs at a time, since they share the localhost ports.
+Each device gets its own localhost ports (SSH, USB/IP, and frame) so multiple Virtual Comets can run side by side.
 
 ### App-only mode
 

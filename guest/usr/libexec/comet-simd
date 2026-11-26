@@ -67,7 +67,8 @@ def key_event(button, value):
 # as an IIO device; see 70-comet-sim.rules); 1-3 is the Comet's internal sensor bus (IMU, light,
 # magnetometer; registered by the comet-board kernel module).
 VHCI = "/sys/devices/platform/vhci_hcd.0"
-HUB = ("10.0.2.2", 3240)
+_cred = os.path.join(os.environ.get("CREDENTIALS_DIRECTORY", ""), "mechumu.usbip_port")
+HUB = ("10.0.2.2", int(open(_cred).read().strip()) if _cred and os.path.isfile(_cred) else 3240)
 ports = {}  # bus ID -> vhci port
 vhci_lock = threading.Lock()  # the I2C keep-alive thread and host commands both pick free ports
 suspended = threading.Event()  # set while a Quick Boot snapshot is taken: leave the buses detached

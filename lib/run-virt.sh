@@ -25,6 +25,10 @@ done
 
 LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "${MECHUMU_OUT:?}"
+SSH_PORT=${MECHUMU_SSH_PORT:-2222}
+USBIP_PORT=${MECHUMU_USBIP_PORT:-3240}
+FRAME_PORT=${MECHUMU_FRAME_PORT:-8090}
+printf 'MECHUMU_SSH_PORT=%s\nMECHUMU_USBIP_PORT=%s\nMECHUMU_FRAME_PORT=%s\n' "$SSH_PORT" "$USBIP_PORT" "$FRAME_PORT" > .ports
 IMAGE=mechanix-os-virt.qcow2
 [[ -f $IMAGE ]] || { echo "no $PWD/$IMAGE - run 'mechumu build'" >&2; exit 1; }
 
@@ -109,6 +113,7 @@ fi
 # (ssh -p 2222 root@localhost), since images built without a password ship the mecha account locked.
 CREDS=()  # expanded with a guard below: macOS bash 3.2 treats an empty array as unset under set -u
 [[ -n $APP ]] && CREDS+=(-smbios "type=11,value=io.systemd.credential:mechanix.app=${APP//,/,,}")
+[[ $USBIP_PORT != 3240 ]] && CREDS+=(-smbios "type=11,value=io.systemd.credential:mechumu.usbip_port=${USBIP_PORT}")
 for key in ~/.ssh/id_ed25519.pub ~/.ssh/id_ecdsa.pub ~/.ssh/id_rsa.pub; do
     [[ -f $key ]] || continue
     k=$(<"$key")
@@ -119,9 +124,9 @@ done
 # The extension connector (`mechumu ext`): USB/IP for the connector's USB, I2C, GPIO and ADC pins,
 # and the other ends of UART1/UART2 above. It exits when QEMU, which takes over this process, does.
 # MECHUMU_RESUME: after a Quick Boot the hub sets the guest's clock and reattaches its buses.
-MECHUMU_QEMU_PID=$$ MECHUMU_RESUME=$RESUME python3 "$LIB/hub.py" >hub.log 2>&1 &  # $$ becomes QEMU at the exec below
+MECHUMU_QEMU_PID=$$ MECHUMU_RESUME=$RESUME MECHUMU_USBIP_PORT=$USBIP_PORT MECHUMU_FRAME_PORT=$FRAME_PORT python3 "$LIB/hub.py" >hub.log 2>&1 &  # $$ becomes QEMU at the exec below
 if [[ -n $FRAME ]]; then
-    url=http://127.0.0.1:8090/
+    url=http://127.0.0.1:${FRAME_PORT}/
     echo "mechumu: the device frame is at $url"
     # The frame app (app/), built on first use if Rust is installed; otherwise a browser tab.
     frame_app() {
@@ -160,7 +165,7 @@ exec "$QEMU" \
     -drive file="$IMAGE",if=none,id=bootdisk,format=qcow2 \
     -device virtio-blk-pci,drive=bootdisk,bootindex=1 \
     -device virtio-rng-pci \
-    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${SSH_PORT}-:22 \
     -device virtio-net-pci,netdev=net0 \
     "${GPU[@]}" \
     "${AUDIO[@]}" \

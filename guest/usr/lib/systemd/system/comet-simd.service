@@ -5,6 +5,7 @@ After=comet-sim-upower.service
 
 [Service]
 Type=notify
+LoadCredential=mechumu.usbip_port
 ExecStart=/usr/libexec/comet-simd
 Restart=on-failure
 

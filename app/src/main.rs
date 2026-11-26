@@ -15,15 +15,15 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::window::WindowBuilder;
 use wry::WebViewBuilder;
 
-const HUB: &str = "127.0.0.1:8090";
+const DEFAULT_HUB: &str = "127.0.0.1:8090";
 
 /// One command to the hub, as the page sends them (POST /cmd); its reply line, if it answered.
-fn hub_command(line: &str) -> Option<String> {
-    let mut sock = TcpStream::connect(HUB).ok()?;
+fn hub_command(hub: &str, line: &str) -> Option<String> {
+    let mut sock = TcpStream::connect(hub).ok()?;
     sock.set_read_timeout(Some(Duration::from_secs(60))).ok()?;
     write!(
         sock,
-        "POST /cmd HTTP/1.1\r\nHost: {HUB}\r\nX-Mechumu: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{line}",
+        "POST /cmd HTTP/1.1\r\nHost: {hub}\r\nX-Mechumu: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{line}",
         line.len()
     )
     .ok()?;
@@ -32,8 +32,8 @@ fn hub_command(line: &str) -> Option<String> {
     reply.split("\r\n\r\n").nth(1).map(|body| body.trim().to_string())
 }
 
-fn hub_up() -> bool {
-    TcpStream::connect_timeout(&HUB.parse().unwrap(), Duration::from_millis(300)).is_ok()
+fn hub_up(hub: &str) -> bool {
+    hub.parse().ok().is_some_and(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok())
 }
 
 fn downloads() -> PathBuf {
@@ -45,7 +45,8 @@ enum Tick {
 }
 
 fn main() -> wry::Result<()> {
-    let url = std::env::args().nth(1).unwrap_or_else(|| format!("http://{HUB}/"));
+    let url = std::env::args().nth(1).unwrap_or_else(|| format!("http://{DEFAULT_HUB}/"));
+    let hub = url.trim_start_matches("http://").trim_end_matches('/').to_string();
     let event_loop = EventLoopBuilder::<Tick>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("Virtual Comet")
@@ -55,16 +56,17 @@ fn main() -> wry::Result<()> {
 
     // The page is served by the hub, which starts alongside QEMU: wait for it, then watch for it to go.
     let proxy = event_loop.create_proxy();
+    let hub_watch = hub.clone();
     std::thread::spawn(move || {
-        while !hub_up() {
+        while !hub_up(&hub_watch) {
             std::thread::sleep(Duration::from_millis(250));
         }
-        while hub_up() {
+        while hub_up(&hub_watch) {
             std::thread::sleep(Duration::from_secs(1));
         }
         let _ = proxy.send_event(Tick::HubGone);
     });
-    while !hub_up() {
+    while !hub_up(&hub) {
         std::thread::sleep(Duration::from_millis(250));
     }
 
@@ -90,10 +92,10 @@ fn main() -> wry::Result<()> {
             Event::NewEvents(StartCause::Init) => {}
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 // Save and quit (Quick Boot); if saving fails (still booting, say), quit anyway.
-                match hub_command("stop") {
+                match hub_command(&hub, "stop") {
                     Some(reply) if reply.starts_with("ok") => {}
                     _ => {
-                        hub_command("quit");
+                        hub_command(&hub, "quit");
                     }
                 }
                 *control_flow = ControlFlow::Exit;
