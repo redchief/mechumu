@@ -32,6 +32,8 @@ usage: mechumu [--device <name>] <command> [options]
         Follow the guest's journal, or one app's log (/tmp/<name>.log, else unit <name>).
   push <file or dir> [<guest dir>]
         Copy a build into the guest, to /opt/ by default (like adb push).
+  sync <file or dir> [<guest dir>] [--once] [--restart <cmd>]
+        Watch a local file or directory and sync changes into the guest (/opt/ by default).
   launch <command> [args...]
         Run a program in the running session, as the mecha user, with the session's environment.
   forward <host_port> <guest_port>
@@ -90,6 +92,7 @@ case $cmd in
     push)
         [[ $# -ge 1 && $# -le 2 && -e $1 ]] || { echo "usage: mechumu push <file or dir> [<guest dir, default /opt>]" >&2; exit 2; }
         scp -q -r -P 2222 "${SSH_OPTS[@]:2}" "$1" "root@localhost:${2:-/opt}/" && echo "pushed to ${2:-/opt}/$(basename "$1")" ;;
+    sync) exec python3 "$HERE/lib/sync.py" "$@" ;;
     launch)
         [[ $# -ge 1 ]] || { echo "usage: mechumu launch <command> [args...]" >&2; exit 2; }
         # As the session's user, with the environment of a process already on its Wayland display, or

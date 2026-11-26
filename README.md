@@ -206,6 +206,7 @@ Like `adb`, for the running Virtual Comet:
 ./mechumu shell                        # a root shell; or run one line: ./mechumu shell journalctl -b -p err
 ./mechumu logs                         # follow the journal; ./mechumu logs mechanix-keyboard follows one app's log
 ./mechumu push build/my_app            # copy a file or directory to /opt/ (or: push <path> <guest dir>)
+./mechumu sync build/my_app --restart /opt/my_app/my_app  # watch & sync changes, restarting the app
 ./mechumu launch /opt/my_app/my_app    # run it in the session, as the mecha user; Ctrl-C stops it
 ./mechumu forward 8080 8080            # forward localhost:8080 into the guest over SSH
 ```
