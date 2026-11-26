@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit tests, syntax & patch checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Python unit tests
+        run: |
+          python3 tests/test_sensors.py
+          python3 tests/test_connector.py
+
+      - name: Check shell script syntax
+        run: |
+          bash -n mechumu lib/run-virt.sh lib/run-evk.sh build/build.sh build/extract-evk-boot.sh tests/smoke.sh
+
+      - name: Verify upstream patches apply cleanly
+        run: |
+          set -euo pipefail
+          while read -r name url rev; do
+            [[ -d "patches/$name" ]] || continue
+            echo "Checking patches/$name against $url @ $rev"
+            tmp=$(mktemp -d)
+            git init -q "$tmp"
+            git -C "$tmp" fetch -q --depth 1 "$url" "$rev"
+            git -C "$tmp" checkout -q -f FETCH_HEAD
+            for p in "patches/$name"/*.patch; do
+              [[ -e "$p" ]] || continue
+              git -C "$tmp" apply --check "$GITHUB_WORKSPACE/$p"
+              echo "  ok: $p"
+            done
+            rm -rf "$tmp"
+          done < <(awk '/^PINS="/,/"$/' build/build.sh | sed 's/^PINS="//; s/"$//')
+
+      - name: Check mechumu-frame (app/) builds
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          cargo check --locked --manifest-path app/Cargo.toml
+
+  build-and-smoke:
+    name: Build Virtual Comet image & run smoke test
+    needs: unit-tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cache/mechumu
+          key: mechumu-cache-${{ hashFiles('build/build.sh', 'patches/**') }}
+          restore-keys: |
+            mechumu-cache-
+
+      - name: Build Virtual Comet image
+        run: |
+          mkdir -p out "${{ github.workspace }}/.cache/mechumu"
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}":/mechumu \
+            -v "${{ github.workspace }}/.cache/mechumu":/var/cache/mechumu \
+            -e MECHUMU_REV="${GITHUB_SHA::7}" \
+            fedora:44 /mechumu/build/build.sh /mechumu/out
+
+      - name: Install QEMU & UEFI firmware
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-arm qemu-utils qemu-efi-aarch64 xxd
+
+      - name: Run end-to-end smoke test
+        run: ./tests/smoke.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: out/hub.log
+          if-no-files-found: ignore
+
+      - name: Upload built image
+        uses: actions/upload-artifact@v4
+        with:
+          name: mechanix-os-virt
+          retention-days: 7
+          path: |
+            out/mechanix-os-virt.qcow2
+            out/evk-boot/

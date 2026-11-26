@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a problem with mechumu, simulated hardware, or the Virtual Comet image
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran (e.g. `./mechumu run --frame`, `./mechumu ctl ...`).
+      placeholder: |
+        ./mechumu run --headless
+        ./mechumu ctl ...
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host OS & architecture
+      placeholder: e.g. macOS 15.3 (Apple Silicon M3) / Fedora 44 arm64
+    validations:
+      required: true
+  - type: input
+    id: qemu
+    attributes:
+      label: QEMU version
+      placeholder: Output of `qemu-system-aarch64 --version`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Output from `out/hub.log`, `./mechumu logs`, or the serial console.
+      render: shell

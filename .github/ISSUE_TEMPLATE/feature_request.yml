@@ -1,0 +1,16 @@
+name: Feature or hardware request
+description: Propose a new emulator feature, simulated peripheral, or developer workflow improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What would you like to see?
+      description: Describe the feature, simulated device, or workflow improvement.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Use case
+      description: How would this help app or OS development on Mecha Comet?
