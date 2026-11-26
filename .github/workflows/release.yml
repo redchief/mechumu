@@ -37,6 +37,7 @@ jobs:
             -v "${{ github.workspace }}/.cache/mechumu":/var/cache/mechumu \
             -e MECHUMU_REV="${GITHUB_SHA::7}" \
             fedora:44 /mechumu/build/build.sh /mechumu/out
+          sudo chown -R "$(id -u):$(id -g)" out "${{ github.workspace }}/.cache/mechumu"
 
       - name: Install QEMU & UEFI firmware
         run: |
