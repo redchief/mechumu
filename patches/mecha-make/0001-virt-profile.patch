@@ -177,7 +177,7 @@ index a4d3921..9e88b29 100755
 +# skips unless opted in; log to /tmp/compositor.log. The keyboard can only allocate (dumb) buffers on the
 +# primary node there, not the render node. The lock script names the i.MX panel, QEMU's is Virtual-1.
 +if [[ " ${PROFILES:-} " == *" virt "* ]]; then
-+    sed -i 's|^export MECHA_DRM_DEVICE=.*|export MECHANIX_ALLOW_SOFTWARE_EGL=1 MECHANIX_COMP_LOG= MECHA_GLES_DEVICE=/dev/dri/card0|' /usr/bin/mechanix-session
++    sed -i 's|^export MECHA_DRM_DEVICE=.*|export MECHANIX_ALLOW_SOFTWARE_EGL=1 MECHANIX_COMP_LOG= MECHA_GLES_DEVICE=/dev/dri/card0 MECHA_SCALE=2.75|' /usr/bin/mechanix-session
 +    sed -i 's|DSI-1|Virtual-1|' /usr/bin/mechanix-lock
 +    # Fedora's udev rules give /dev/gpiochip* to group gpio; let the dev user drive the simulated header.
 +    usermod -aG gpio "$USERNAME"
